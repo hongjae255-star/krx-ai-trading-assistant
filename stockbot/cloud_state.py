@@ -35,7 +35,7 @@ class SupabaseStorage:
         self.state_object = env("SUPABASE_STATE_OBJECT", "state/state_bundle.zip")
         self.timeout = float(settings.get("cloud.http_timeout_seconds", 30))
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.1"})
+        self.session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.2"})
 
     @property
     def configured(self) -> bool:
@@ -52,6 +52,31 @@ class SupabaseStorage:
         if content_type:
             h["Content-Type"] = content_type
         return h
+
+    @staticmethod
+    def _is_not_found(response: requests.Response) -> bool:
+        """Handle Supabase Storage's inconsistent not-found responses.
+
+        Depending on gateway/API version, a missing bucket/object can arrive as
+        HTTP 404, or as HTTP 400 with a JSON body whose statusCode is 404 and
+        code is NoSuchBucket/NoSuchKey. Treat both as a normal miss.
+        """
+        if response.status_code == 404:
+            return True
+        try:
+            body = response.json() if response.content else {}
+        except Exception:
+            return False
+        status = str(body.get("statusCode", ""))
+        code = str(body.get("code", ""))
+        error = str(body.get("error", ""))
+        message = str(body.get("message", ""))
+        return (
+            status == "404"
+            or code in {"NoSuchBucket", "NoSuchKey", "NoSuchObject"}
+            or ("not found" in error.lower())
+            or ("not found" in message.lower())
+        )
 
     @staticmethod
     def _raise_with_body(response: requests.Response, action: str) -> None:
@@ -84,7 +109,7 @@ class SupabaseStorage:
             if bool(body.get("public", False)) != bool(public):
                 log.warning("Supabase bucket %s exists but public=%s (expected %s)", bucket, body.get("public"), public)
             return
-        if r.status_code != 404:
+        if not self._is_not_found(r):
             self._raise_with_body(r, f"get bucket {bucket}")
         payload = {"id": bucket, "name": bucket, "public": bool(public), "file_size_limit": 52428800}
         r = self.session.post(
@@ -101,7 +126,7 @@ class SupabaseStorage:
 
     def download(self, bucket: str, path: str) -> bytes | None:
         r = self.session.get(self._object_url(bucket, path), headers=self._headers(), timeout=self.timeout)
-        if r.status_code == 404:
+        if self._is_not_found(r):
             return None
         self._raise_with_body(r, f"download {bucket}/{path}")
         return r.content

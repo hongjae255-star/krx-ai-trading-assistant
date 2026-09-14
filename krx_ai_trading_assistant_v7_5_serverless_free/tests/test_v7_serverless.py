@@ -20,14 +20,14 @@ def test_cloud_config_uses_15_minute_monitoring():
     assert s.get("us_market.scheduler.active_interval_minutes") == 15
 
 
-def test_supabase_secret_key_uses_apikey_header(monkeypatch, tmp_path):
+def test_supabase_secret_key_uses_storage_auth_headers(monkeypatch, tmp_path):
     monkeypatch.setenv("SUPABASE_URL", "https://abc.supabase.co")
     monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_example")
     s = Settings(tmp_path, {"cloud": {"http_timeout_seconds": 3}})
     c = SupabaseStorage(s)
     h = c._headers("application/json")
     assert h["apikey"] == "sb_secret_example"
-    assert "Authorization" not in h
+    assert h["Authorization"] == "Bearer sb_secret_example"
 
 
 def test_supabase_legacy_service_role_keeps_bearer(monkeypatch, tmp_path):
@@ -58,3 +58,30 @@ def test_personal_settings_can_come_from_environment(monkeypatch):
     assert s.get('existing_positions.0.code') is None  # dotted getter does not index lists
     assert s.get('existing_positions')[0]['quantity'] == 221
     assert s.get('risk.day_trade_capital_krw') == 7000000
+
+
+def _resp(status: int, body: str):
+    import requests
+    r = requests.Response()
+    r.status_code = status
+    r._content = body.encode("utf-8")
+    r.reason = "Bad Request" if status == 400 else "Not Found"
+    return r
+
+
+def test_supabase_400_nosuchbucket_is_treated_as_missing(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPABASE_URL", "https://abc.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_example")
+    s = Settings(tmp_path, {"cloud": {"http_timeout_seconds": 3}})
+    c = SupabaseStorage(s)
+    r = _resp(400, '{"statusCode":"404","error":"Bucket not found","message":"Bucket not found","code":"NoSuchBucket"}')
+    assert c._is_not_found(r) is True
+
+
+def test_supabase_real_400_is_not_silenced(monkeypatch, tmp_path):
+    monkeypatch.setenv("SUPABASE_URL", "https://abc.supabase.co")
+    monkeypatch.setenv("SUPABASE_SECRET_KEY", "sb_secret_example")
+    s = Settings(tmp_path, {"cloud": {"http_timeout_seconds": 3}})
+    c = SupabaseStorage(s)
+    r = _resp(400, '{"statusCode":"400","error":"Bad Request","message":"invalid payload"}')
+    assert c._is_not_found(r) is False

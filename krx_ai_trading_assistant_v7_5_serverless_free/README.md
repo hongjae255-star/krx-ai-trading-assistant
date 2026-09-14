@@ -56,3 +56,6 @@ pytest -q
 python run.py doctor
 python run.py app
 ```
+
+## v7.3 PWA hosting note
+The mobile PWA is deployed with **GitHub Pages**, not Supabase Storage. Supabase Storage intentionally serves HTML as plain text, so it is used only for state and dashboard JSON. Run the `Deploy mobile PWA to GitHub Pages` workflow after enabling Pages with **Settings -> Pages -> Source: GitHub Actions**.

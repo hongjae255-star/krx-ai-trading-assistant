@@ -35,20 +35,35 @@ class SupabaseStorage:
         self.state_object = env("SUPABASE_STATE_OBJECT", "state/state_bundle.zip")
         self.timeout = float(settings.get("cloud.http_timeout_seconds", 30))
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.0"})
+        self.session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.1"})
 
     @property
     def configured(self) -> bool:
         return bool(self.url and self.key)
 
     def _headers(self, content_type: str | None = None) -> dict[str, str]:
+        # Supabase Storage expects an Authorization header for bucket/object
+        # operations. The official clients send both the project API key and
+        # an Authorization bearer value to Storage. This applies to the 2026
+        # sb_secret_* keys as well as legacy service_role JWTs.
         h = {"apikey": self.key}
-        # Legacy service_role keys are JWTs; keep Bearer for compatibility.
-        if self.key and not self.key.startswith("sb_secret_"):
+        if self.key:
             h["Authorization"] = f"Bearer {self.key}"
         if content_type:
             h["Content-Type"] = content_type
         return h
+
+    @staticmethod
+    def _raise_with_body(response: requests.Response, action: str) -> None:
+        if response.ok:
+            return
+        body = (response.text or "").strip().replace("\n", " ")
+        if len(body) > 800:
+            body = body[:800] + "..."
+        raise requests.HTTPError(
+            f"{response.status_code} {response.reason} during {action}; body={body or '<empty>'}",
+            response=response,
+        )
 
     def _object_url(self, bucket: str, path: str, public: bool = False) -> str:
         safe = "/".join(quote(x, safe="") for x in path.strip("/").split("/"))
@@ -70,14 +85,14 @@ class SupabaseStorage:
                 log.warning("Supabase bucket %s exists but public=%s (expected %s)", bucket, body.get("public"), public)
             return
         if r.status_code != 404:
-            r.raise_for_status()
+            self._raise_with_body(r, f"get bucket {bucket}")
         payload = {"id": bucket, "name": bucket, "public": bool(public), "file_size_limit": 52428800}
         r = self.session.post(
             f"{self.url}/storage/v1/bucket", headers=self._headers("application/json"),
             data=json.dumps(payload), timeout=self.timeout,
         )
         if r.status_code not in {200, 201}:
-            r.raise_for_status()
+            self._raise_with_body(r, f"create bucket {bucket}")
         log.info("Created Supabase bucket %s public=%s", bucket, public)
 
     def ensure_buckets(self) -> None:
@@ -88,7 +103,7 @@ class SupabaseStorage:
         r = self.session.get(self._object_url(bucket, path), headers=self._headers(), timeout=self.timeout)
         if r.status_code == 404:
             return None
-        r.raise_for_status()
+        self._raise_with_body(r, f"download {bucket}/{path}")
         return r.content
 
     def upload(self, bucket: str, path: str, data: bytes, content_type: str = "application/octet-stream") -> None:
@@ -102,7 +117,7 @@ class SupabaseStorage:
             r = self.session.put(
                 self._object_url(bucket, path), headers=headers, data=data, timeout=self.timeout,
             )
-        r.raise_for_status()
+        self._raise_with_body(r, f"upload {bucket}/{path}")
 
     def upload_json(self, path: str, obj: Any, public: bool = True) -> None:
         raw = json.dumps(obj, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8")

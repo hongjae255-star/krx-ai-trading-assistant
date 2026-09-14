@@ -1,0 +1,26 @@
+KRX AI v7 SERVERLESS FREE — 최초 설정 체크리스트
+
+[ ] 1. Supabase 무료 project 생성
+[ ] 2. Project URL 확인
+[ ] 3. backend Secret key(sb_secret_...) 생성/확인
+[ ] 4. GitHub repository 생성 후 v7 파일 업로드
+[ ] 5. GitHub Actions Secrets 등록
+       KIS_APP_KEY
+       KIS_APP_SECRET
+       DART_API_KEY
+       TELEGRAM_BOT_TOKEN
+       TELEGRAM_CHAT_ID
+       SUPABASE_URL
+       SUPABASE_SECRET_KEY
+       (선택) FRED_API_KEY
+       (권장) EXISTING_POSITIONS_JSON
+       (권장) DAY_TRADE_CAPITAL_KRW
+[ ] 6. Actions > Cloud manual job > macro 실행
+[ ] 7. Supabase Storage에서 krx-ai-state / krx-ai-public bucket 생성 확인
+[ ] 8. Actions > Deploy mobile PWA to Supabase 실행
+[ ] 9. deploy 로그의 app_url을 휴대폰에서 열기
+[ ] 10. iPhone Safari '홈 화면에 추가' / Android '앱 설치'
+[ ] 11. Telegram 테스트 확인
+[ ] 12. 다음 거래일 자동 Actions 실행 여부 확인
+
+자세한 내용: SETUP_V7_SERVERLESS.md

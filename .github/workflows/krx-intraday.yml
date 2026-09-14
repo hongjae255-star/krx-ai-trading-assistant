@@ -1,0 +1,57 @@
+name: KRX 15-minute monitor
+on:
+  schedule:
+    - cron: '12,42 9-14 * * 1-5'
+      timezone: 'Asia/Seoul'
+    - cron: '27,57 9-14 * * 1-5'
+      timezone: 'Asia/Seoul'
+    - cron: '12 15 * * 1-5'
+      timezone: 'Asia/Seoul'
+    - cron: '27 15 * * 1-5'
+      timezone: 'Asia/Seoul'
+  workflow_dispatch:
+    inputs:
+      full_scan:
+        description: Also rescan market leaders
+        required: false
+        default: true
+        type: boolean
+concurrency:
+  group: krx-ai-cloud-state
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      FREE_MODE: 'true'
+      KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+      EXISTING_POSITIONS_JSON: ${{ secrets.EXISTING_POSITIONS_JSON }}
+      DAY_TRADE_CAPITAL_KRW: ${{ secrets.DAY_TRADE_CAPITAL_KRW }}
+      KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+      DART_API_KEY: ${{ secrets.DART_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run monitor
+        shell: bash
+        run: |
+          S="${{ github.event.schedule }}"
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.full_scan }}" == "true" ]]; then
+            python -m stockbot.cloud_runner kr-intraday --full-scan
+          elif [[ "$S" == "12,42 9-14 * * 1-5" || "$S" == "12 15 * * 1-5" ]]; then
+            python -m stockbot.cloud_runner kr-intraday --full-scan
+          else
+            python -m stockbot.cloud_runner kr-intraday
+          fi

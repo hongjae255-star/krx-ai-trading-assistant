@@ -1,0 +1,271 @@
+timezone: Asia/Seoul
+
+# v4 FREE: 유료 LLM/API를 사용하지 않습니다.
+free_mode: true
+
+scheduler:
+  research: "07:45"
+  premarket: "08:30"
+  # v5: 추천 종목은 10분 간격으로 모니터링합니다.
+  # 아래 intraday_times는 이전 버전 호환용 fallback입니다.
+  intraday_times: []
+  closing: "15:45"
+
+
+monitoring:
+  # 추천 종목 현재가/VWAP/목표가 상태를 10분마다 확인합니다.
+  active_interval_minutes: 15
+  active_start: "09:10"
+  active_end: "15:20"
+  # 시장 전체 교체 후보 스캔은 KIS 호출량을 줄이기 위해 30분마다만 수행합니다.
+  replacement_interval_minutes: 30
+  # 기존 추천이 있을 때는 최하위 추천보다 이 점수만큼 강해야 교체 후보로 알립니다.
+  replacement_score_margin: 8.0
+  # 아침 추천이 0개였을 때도 장중 신규 주도 후보는 이 점수 이상이어야 알립니다.
+  new_leader_min_score: 68.0
+  # Telegram은 상태 변화/목표·손절·진입 신호가 있을 때 즉시,
+  # 변화가 없어도 30분마다 요약을 보냅니다.
+  telegram_summary_interval_minutes: 30
+  app_refresh_seconds: 20
+  web_host: "0.0.0.0"
+  web_port: 8080
+
+market:
+  # v3는 최종 추천 외에도 shadow 후보를 모두 저장/평가하여 학습 표본을 늘립니다.
+  candidate_pool_size: 24
+  final_pick_count: 3
+  min_price_krw: 5000
+  min_turnover_krw: 10000000000
+  max_one_day_gain_pct: 15.0
+  max_five_day_gain_pct: 30.0
+  exclude_name_contains: ["스팩", "SPAC", "ETN", "ETF"]
+  exclude_codes: []
+
+technical:
+  atr_period: 14
+  entry_pullback_atr: 0.30
+  second_entry_pullback_atr: 0.70
+  stop_atr: 1.10
+  target1_r: 1.20
+  target2_r: 2.00
+  minimum_risk_reward: 1.35
+  vwap_confirmation_tolerance_pct: 0.35
+
+risk:
+  # 단타용 신규 자금. 본인 상황에 맞게 수정하세요.
+  day_trade_capital_krw: 5000000
+  max_total_deployed_pct: 60
+  max_single_stock_pct: 25
+  max_high_volatility_stock_pct: 10
+  minimum_cash_pct: 40
+  high_volatility_existing_position_penalty_pct: 10
+  market_risk_off_penalty_pct: 15
+  macro_event_penalty_pct: 10
+
+existing_positions: []
+
+# 해석 가능한 baseline 모델. v3 ML은 이 점수를 입력/대조군으로 사용하고,
+# walk-forward OOF에서 실제로 개선될 때만 최대 65%까지 혼합됩니다.
+base_weights:
+  liquidity: 0.15
+  turnover_acceleration: 0.09
+  momentum_1d: 0.06
+  momentum_5d: 0.06
+  momentum_10d: 0.05
+  trend_quality: 0.10
+  foreign_flow: 0.10
+  institution_flow: 0.07
+  news_catalyst: 0.08
+  broker_report_signal: 0.09
+  event_positive_strength: 0.04
+  event_risk_inverse: 0.04
+  overheating_inverse: 0.06
+  volatility_quality: 0.04
+  atr_pct_quality: 0.03
+  near_20d_high: 0.03
+  range_position_20d: 0.02
+  close_location_value: 0.03
+  volume_pressure: 0.04
+  # v6 global cross-asset layer
+  macro_global_risk_on: 0.05
+  macro_rate_easing: 0.03
+  macro_credit_safety: 0.03
+  macro_volatility_safety: 0.03
+  macro_krw_safety: 0.03
+  macro_liquidity_support: 0.02
+  market_live_risk_on: 0.04
+  market_semis_strength: 0.03
+  market_bond_bid: 0.02
+  market_credit_bid: 0.02
+
+global_macro:
+  enabled: true
+  cache_seconds: 900
+  live_cache_seconds: 600
+  http_timeout_seconds: 10
+  live_proxies:
+    spy: {symbol: SPY, exchange: NYS}
+    qqq: {symbol: QQQ, exchange: NAS}
+    semis: {symbol: SMH, exchange: NAS}
+    smallcaps: {symbol: IWM, exchange: NYS}
+    long_bonds: {symbol: TLT, exchange: NAS}
+    high_yield: {symbol: HYG, exchange: NYS}
+    dollar: {symbol: UUP, exchange: NYS}
+    gold: {symbol: GLD, exchange: NYS}
+    oil: {symbol: USO, exchange: NYS}
+  # FRED_API_KEY is optional. Without it, current-vintage public graph CSV is used.
+  # With a free key, as-of/vintage-safe historical retrieval can be enabled.
+  series: {}
+
+us_market:
+  enabled: true
+  timezone: America/New_York
+  exchanges: [NAS, NYS, AMS]
+  # Remove broad/leveraged/inverse ETPs from single-stock recommendations.
+  exclude_symbols: [SPY, QQQ, DIA, IWM, TLT, IEF, SHY, HYG, LQD, GLD, SLV, USO, UUP, VXX, UVXY, SQQQ, TQQQ, SOXL, SOXS]
+  exclude_name_contains: [" ETF", "2X", "3X", "ULTRA", "BULL", "BEAR", "INVERSE"]
+  market:
+    candidate_pool_size: 24
+    final_pick_count: 3
+    min_price_usd: 5
+    min_turnover_usd: 50000000
+  minimum_final_score: 58.0
+  replacement_min_score_edge: 4.0
+  max_total_deployed_pct: 50
+  max_single_stock_pct: 20
+  scheduler:
+    premarket_et: "09:15"
+    active_start_et: "09:40"
+    active_end_et: "15:50"
+    active_interval_minutes: 15
+    replacement_interval_minutes: 30
+    telegram_summary_interval_minutes: 30
+    closing_et: "16:15"
+  technical:
+    atr_period: 14
+    entry_pullback_atr: 0.30
+    second_entry_pullback_atr: 0.70
+    stop_atr: 1.10
+    target1_r: 1.20
+    target2_r: 2.00
+  base_weights:
+    liquidity: 0.15
+    turnover_acceleration: 0.09
+    momentum_1d: 0.08
+    momentum_5d: 0.08
+    momentum_10d: 0.05
+    trend_quality: 0.10
+    news_catalyst: 0.00
+    broker_report_signal: 0.00
+    overheating_inverse: 0.06
+    volatility_quality: 0.05
+    atr_pct_quality: 0.04
+    near_20d_high: 0.04
+    range_position_20d: 0.03
+    close_location_value: 0.03
+    volume_pressure: 0.05
+    macro_global_risk_on: 0.06
+    macro_rate_easing: 0.04
+    macro_credit_safety: 0.04
+    macro_volatility_safety: 0.04
+    macro_usd_safety: 0.02
+    macro_liquidity_support: 0.03
+    market_live_risk_on: 0.05
+    market_nasdaq_strength: 0.04
+    market_semis_strength: 0.04
+    market_bond_bid: 0.02
+    market_credit_bid: 0.03
+    market_dollar_weakness: 0.02
+
+research:
+  enabled: true
+  source: naver_finance
+  calendar_lookback_days: 4
+  max_pages: 30
+  max_report_candidates: 8
+  fetch_detail_pages: true
+  request_delay_seconds: 0.25
+  http_timeout_seconds: 12
+  analysis_batch_size: 100
+  broker_learning_rate: 0.02
+  max_report_stocks_for_close_feedback: 250
+
+# v3 supervised prediction layer.
+prediction:
+  enabled: true
+  training_lookback_days: 365
+  min_training_samples: 400
+  min_training_dates: 20
+  walk_forward_splits: 5
+  walk_forward_min_train_dates: 8
+  # test 직전 1개 거래일을 train에서 제외해 인접기간 누수/의존성을 줄입니다.
+  embargo_dates: 1
+  # 최근 데이터에 더 높은 가중치를 주어 시장 변화에 적응합니다.
+  recency_half_life_days: 45
+  # 왕복 수수료+슬리피지의 보수적 기본 가정. 본인 실제 비용에 맞춰 수정하세요.
+  estimated_round_trip_cost_bps: 25
+  # 비용 차감 후 이 수익률보다 높으면 상승(label=1)로 학습합니다.
+  label_threshold_pct: 0.30
+  isotonic_min_samples: 1000
+  calibration_bins: 5
+  oof_evaluation_fraction: 0.35
+  conformal_window: 500
+  prediction_interval_alpha: 0.20
+  minimum_oof_improvement: 0.01
+  max_model_blend: 0.65
+  drift_recent_days: 4
+  drift_reduce_threshold: 1.35
+  drift_disable_threshold: 2.50
+  min_up_probability: 0.56
+  min_expected_return_pct: 0.20
+  minimum_lower_bound_pct: -1.80
+  minimum_final_score: 60.0
+  risk_off_score_add: 4.0
+  high_vol_score_add: 2.0
+  risk_off_probability_add: 0.04
+  high_event_risk_score_add: 2.0
+  allow_abstain: true
+  lower_bound_penalty_per_pct: 4.0
+  random_seed: 42
+
+# 기존 multiplicative-weight baseline 학습은 v2보다 천천히 움직이게 변경.
+learning:
+  enabled: true
+  learning_rate: 0.02
+  baseline_decay: 0.05
+  min_samples_before_learning: 30
+  reward_clip: 1.0
+  reward_target_return_pct: 4.0
+  max_weight_change_per_day: 0.015
+  min_weight: 0.01
+  max_weight: 0.22
+  report_lookback_days: 60
+
+local_engine:
+  enabled: true
+  # 수치 점수 상위 후보에만 DART/공개뉴스 상세 분석을 수행합니다.
+  shortlist_size: 10
+  max_event_age_days: 7
+  # Naver Finance의 공개 종목뉴스 목록에서 제목 메타데이터만 읽습니다.
+  fetch_public_news: true
+  news_max_items_per_stock: 8
+  news_http_timeout_seconds: 8
+  news_request_delay_seconds: 0.10
+  # 무료판은 별도 글로벌 유료 데이터 피드를 사용하지 않아 중립 기본값입니다.
+  global_risk_on_default: 0.50
+  macro_event_risk_default: 0.50
+
+cloud:
+  # v7 serverless mode: GitHub Actions restores/persists local state via Supabase Storage.
+  enabled: true
+  http_timeout_seconds: 30
+  public_refresh_seconds: 60
+
+storage:
+  sqlite_path: data/stockbot.sqlite3
+  token_cache_path: data/kis_token.json
+  dart_corp_cache_path: data/dart_corp_codes.json
+  output_dir: data/reports
+  model_dir: data/models
+  us_sqlite_path: data/us_stockbot.sqlite3
+  us_model_dir: data/us_models

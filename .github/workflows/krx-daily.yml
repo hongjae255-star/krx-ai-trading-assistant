@@ -1,0 +1,60 @@
+name: KRX daily jobs
+on:
+  schedule:
+    - cron: '47 7 * * 1-5'
+      timezone: 'Asia/Seoul'
+    - cron: '32 8 * * 1-5'
+      timezone: 'Asia/Seoul'
+    - cron: '47 15 * * 1-5'
+      timezone: 'Asia/Seoul'
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Job to run
+        required: true
+        default: kr-premarket
+        type: choice
+        options: [research, kr-premarket, kr-close]
+concurrency:
+  group: krx-ai-cloud-state
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      FREE_MODE: 'true'
+      KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+      EXISTING_POSITIONS_JSON: ${{ secrets.EXISTING_POSITIONS_JSON }}
+      DAY_TRADE_CAPITAL_KRW: ${{ secrets.DAY_TRADE_CAPITAL_KRW }}
+      KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+      DART_API_KEY: ${{ secrets.DART_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Select scheduled job
+        id: choose
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "job=${{ inputs.job }}" >> "$GITHUB_OUTPUT"
+          else
+            case "${{ github.event.schedule }}" in
+              "47 7 * * 1-5")  echo "job=research" >> "$GITHUB_OUTPUT" ;;
+              "32 8 * * 1-5")  echo "job=kr-premarket" >> "$GITHUB_OUTPUT" ;;
+              "47 15 * * 1-5") echo "job=kr-close" >> "$GITHUB_OUTPUT" ;;
+              *) exit 2 ;;
+            esac
+          fi
+      - run: python -m stockbot.cloud_runner "${{ steps.choose.outputs.job }}"

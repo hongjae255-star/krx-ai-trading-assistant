@@ -166,7 +166,8 @@ class USMarketAssistant:
     def find_replacement(self, current_recs: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
         """30-minute full-market rescan for a clearly stronger US leader.
 
-        Works even when the morning model abstained. This is analysis-only.
+        Persists the strongest rejected candidates so the mobile app can explain
+        *why* it abstained instead of only showing "no recommendation".
         """
         current_recs = current_recs or []
         current_codes = {str(r.get("code", "")).upper() for r in current_recs}
@@ -175,16 +176,32 @@ class USMarketAssistant:
         self.db.set_state(f"us_exchange_map:{self.today()}", {**(self.db.get_state(f"us_exchange_map:{self.today()}", {}) or {}), **exmap})
         min_score = float(self.settings.get("us_market.minimum_final_score", 58.0))
         edge = float(self.settings.get("us_market.replacement_min_score_edge", 4.0))
+        required = max(min_score, current_best + edge if current_best else min_score)
+        top_rows = []
         for c in cands:
             if c.code.upper() in current_codes:
                 continue
-            if c.final_score < max(min_score, current_best + edge if current_best else min_score):
+            reasons = []
+            if c.final_score < required:
+                reasons.append(f"점수 {c.final_score:.1f} < 장중 기준 {required:.1f}")
+            pred = c.prediction or {}
+            row = {
+                "code": c.code, "name": c.name, "price": c.price, "change_pct": c.change_pct,
+                "score": round(c.final_score, 2), "required_score": round(required, 2),
+                "gap": round(c.final_score-required, 2),
+                "up_probability": (round(100*float(pred.get("up_probability", 0)), 1) if pred.get("active") else None),
+                "expected_return_pct": (round(float(pred.get("expected_return_pct", 0)), 2) if pred.get("active") else None),
+                "risk_flags": list(c.risk_flags or []),
+                "reasons": reasons + [f"risk: {x}" for x in list(c.risk_flags or [])[:3]],
+            }
+            top_rows.append(row)
+            if c.final_score < required:
                 continue
             daily = dmap.get(c.code)
             if daily is None or daily.empty:
                 continue
             plan = make_us_plan(c, daily, self.cfg)
-            row = {
+            accepted = {
                 "market": "US", "code": c.code, "name": c.name, "score": round(c.final_score, 2),
                 "price": c.price, "change_pct": c.change_pct, "status": "신규 주도 후보",
                 "entry_low": plan.entry_low_1, "entry_high": plan.entry_high_1,
@@ -192,9 +209,24 @@ class USMarketAssistant:
                 "target1": plan.target1, "target2": plan.target2,
                 "summary": summary, "ts": datetime.now(self.tz).isoformat(timespec="seconds"),
             }
-            self.db.set_state("us_last_replacement_candidate", row)
-            return row
+            self.db.set_state("us_last_replacement_candidate", accepted)
+            self.db.set_state("us_last_replacement_scan", {
+                "trade_date": self.today(), "phase": "intraday", "required_score": required,
+                "evaluated_count": len(top_rows), "filtered_count": max(0, len(cands)-len(top_rows)),
+                "top": sorted(top_rows, key=lambda z: float(z.get("score", 0)), reverse=True)[:5],
+                "accepted": accepted, "data_status": "ok",
+                "ts": datetime.now(self.tz).isoformat(timespec="seconds"),
+            })
+            return accepted
         self.db.set_state("us_last_replacement_candidate", None)
+        self.db.set_state("us_last_replacement_scan", {
+            "trade_date": self.today(), "phase": "intraday", "required_score": required,
+            "evaluated_count": len(top_rows), "filtered_count": max(0, len(cands)-len(top_rows)),
+            "top": sorted(top_rows, key=lambda z: float(z.get("score", 0)), reverse=True)[:5],
+            "accepted": None,
+            "data_status": "network_stale" if "previous dashboard state preserved" in summary.lower() else "ok",
+            "summary": summary, "ts": datetime.now(self.tz).isoformat(timespec="seconds"),
+        })
         return None
 
     def intraday(self, force_summary:bool=False, scan_replacement: bool=False)->list[dict[str,Any]]:

@@ -39,12 +39,46 @@ function macroValue(d,key,digits=2,suffix=''){
 function renderMacro(d){
   const f=d?.features||{};
   const score=100*Number(f.macro_global_risk_on??.5); const liveScore=100*Number(d?.live?.features?.market_live_risk_on??.5);
-  $('#macroCard').innerHTML=`<div class="risk-gauge"><div><b>Global Risk Regime</b><div class="market-label">${d?.source||'local cache'} · 장중 ${liveScore.toFixed(0)} · 실패 ${d?.failures?.length||0}개</div></div><div class="risk-score">${score.toFixed(0)}</div></div><div class="macro-grid"><div class="macro-item"><span>미 2년물</span><b>${macroValue(d,'ust_2y',2,'%')}</b></div><div class="macro-item"><span>미 10년물</span><b>${macroValue(d,'ust_10y',2,'%')}</b></div><div class="macro-item"><span>VIX</span><b>${macroValue(d,'vix')}</b></div><div class="macro-item"><span>USD/KRW</span><b>${macroValue(d,'usdkrw',0)}</b></div><div class="macro-item"><span>HY OAS</span><b>${macroValue(d,'hy_oas',2,'%')}</b></div><div class="macro-item"><span>유동성</span><b>${(100*Number(f.macro_liquidity_support??.5)).toFixed(0)}</b></div></div>`;
+  const total=Number(d?.total_series_count||Object.keys(d?.series||{}).length||0), fresh=Number(d?.fresh_series_count||0), stale=Number(d?.stale_series_count||0), hard=Number(d?.hard_failure_count??d?.failures?.length??0);
+  const keyStatus=d?.api_key_status||'unknown';
+  const sourceLabel=keyStatus==='valid'?(d?.source||'FRED_API'):(keyStatus==='missing'?'FRED 키 미설정':keyStatus==='invalid'?'FRED 키 형식 오류':(d?.source||'local cache'));
+  $('#macroCard').innerHTML=`<div class="risk-gauge"><div><b>Global Risk Regime</b><div class="market-label">${esc(sourceLabel)} · fresh ${fresh}/${total||'-'} · 이전값 ${stale} · 실제 실패 ${hard}</div></div><div class="risk-score">${score.toFixed(0)}</div></div><div class="macro-grid"><div class="macro-item"><span>미 2년물</span><b>${macroValue(d,'ust_2y',2,'%')}</b></div><div class="macro-item"><span>미 10년물</span><b>${macroValue(d,'ust_10y',2,'%')}</b></div><div class="macro-item"><span>VIX</span><b>${macroValue(d,'vix')}</b></div><div class="macro-item"><span>USD/KRW</span><b>${macroValue(d,'usdkrw',0)}</b></div><div class="macro-item"><span>HY OAS</span><b>${macroValue(d,'hy_oas',2,'%')}</b></div><div class="macro-item"><span>유동성</span><b>${(100*Number(f.macro_liquidity_support??.5)).toFixed(0)}</b></div></div>${keyStatus!=='valid'?'<div class="refresh-note">GitHub Actions에서는 무료 FRED_API_KEY를 등록하면 공식 API를 사용해 매크로 실패율이 크게 줄어듭니다.</div>':''}`;
 }
 
 function activeData(d){
   if(currentMarket==='US') return {recs:d.us?.recommendations||[], learning:d.us?.learning||{}, interval:d.us?.monitor_interval_minutes||15, reports:{report_count:0,broker_count:0,top:[]}, currency:'USD'};
   return {recs:d.recommendations||[], learning:d.learning||{}, interval:d.monitor_interval_minutes||15, reports:d.reports||{}, currency:'KRW'};
+}
+
+const esc = v => String(v??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function diagnosticData(d){return currentMarket==='US'?(d.us?.candidate_diagnostics||{}):(d.candidate_diagnostics||{})}
+function sparkline(points=[]){
+  const vals=(points||[]).map(x=>Number(x.close)).filter(Number.isFinite); if(vals.length<2)return '<div class="chart-empty">차트 데이터 대기</div>';
+  const lo=Math.min(...vals), hi=Math.max(...vals), span=Math.max(hi-lo,Math.abs(hi)*.002,1e-9), w=320,h=92,p=5;
+  const xy=vals.map((v,i)=>`${(p+i*(w-2*p)/(vals.length-1)).toFixed(1)},${(p+(hi-v)*(h-2*p)/span).toFixed(1)}`).join(' ');
+  const cls=vals.at(-1)>=vals[0]?'spark-up':'spark-down';
+  return `<svg class="spark ${cls}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"><polyline points="${xy}" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="5" y1="87" x2="315" y2="87" class="spark-base"/></svg>`;
+}
+function renderMarketPulse(d){
+  const p=d?.market_pulse||{}, idx=p.indexes||{}, side=currentMarket==='US'?(p.us||{}):(p.kr||{}), reg=side.regime||{};
+  const keys=currentMarket==='US'?['nasdaq','sp500','dow','russell2000']:['kospi','kosdaq'];
+  const total=Number(reg.total||0), above=Number(reg.above_ma20||0), pos=Number(reg.positive_5d||0), score=Number(reg.score??50);
+  const regimeCls=score>=65?'good':score<=35?'bad':'neutral';
+  $('#marketRegime').innerHTML=`<div class="pulse-top"><div><b>${esc(reg.label||'데이터 대기')}</b><div class="sub">${esc(side.leadership||'리더십 계산 중')} · 5일 상대강도 ${pct(side.growth_lead_5d_pct||0)}</div></div><div class="pulse-score ${regimeCls}">${score.toFixed(0)}</div></div><div class="pulse-metrics"><div><span>MA20 상단</span><b>${above}/${total||'-'}</b></div><div><span>5일 상승</span><b>${pos}/${total||'-'}</b></div><div><span>평균 5D</span><b>${pct(reg.avg_5d_pct||0)}</b></div></div>`;
+  $('#indexCharts').innerHTML=keys.map(k=>{const x=idx[k];if(!x)return `<article class="index-card card"><b>${k.toUpperCase()}</b><div class="chart-empty">데이터 대기</div></article>`; const ch=Number(x.change_1d_pct||0), r5=Number(x.return_5d_pct||0);return `<article class="index-card card"><div class="index-head"><div><b>${esc(x.name||k)}</b><div class="index-source">${esc(x.source||'')}${x.proxy?' · proxy':''}${x.stale?' · STALE':''}</div></div><div class="index-last">${Number(x.latest||0).toLocaleString(undefined,{maximumFractionDigits:2})}<span class="${ch>=0?'change pos':'change neg'}">${pct(ch)}</span></div></div>${sparkline(x.points||[])}<div class="index-foot"><span>5D <b class="${r5>=0?'change pos':'change neg'}">${pct(r5)}</b></span><span>MA20 ${pct(x.distance_ma20_pct||0)}</span><span>${esc(x.trend||'')}</span></div></article>`}).join('');
+}
+function renderDataHealth(d){
+  const h=d?.data_health||{}, good=h.status==='good', waiting=h.status==='waiting'; $('#healthBadge').textContent=good?'데이터 정상':waiting?'데이터 대기':'일부 지연'; $('#healthBadge').className=`health-badge ${good?'ok':waiting?'':'warn'}`;
+  const mf=Number(h.macro_failures||0), ms=Number(h.macro_stale||0), key=h.macro_api_key_status||'unknown';
+  const fredText=mf>0?`${mf} 실패`:ms>0?`${ms} 이전값`:key==='missing'?'키 필요':key==='invalid'?'키 오류':'OK';
+  const items=[['FRED',fredText,mf===0&&ms===0&&key==='valid'?'ok':(mf===0&&ms===0&&key==='unknown'?'ok':'warn')],['장중 프록시',Number(h.live_proxy_failures||0),null],['지수',Number(h.index_failures||0)+Number(h.index_stale||0),null],['KR 스캔',h.kr_scan==='ok'?0:(h.kr_scan==='not_scanned'?null:1),null],['US 스캔',h.us_scan==='ok'?0:(h.us_scan==='not_scanned'?null:1),null]];
+  $('#dataHealth').innerHTML=items.map(([n,v,forced])=>{if(typeof v==='string')return `<div class="health-item ${forced||'warn'}"><span>${n}</span><b>${v}</b></div>`;const cls=v===0?'ok':v==null?'idle':'warn';return `<div class="health-item ${cls}"><span>${n}</span><b>${v===0?'OK':v==null?'대기':`${v} 경고`}</b></div>`}).join('');
+}
+function renderDiagnostics(d){
+  const x=diagnosticData(d), top=x.top||[]; $('#scanSummary').textContent=x.phase==='intraday'?`장중 전체스캔 · ${x.evaluated_count||0}개 평가`:`장전 후보 · ${x.evaluated_count||0}개 평가`;
+  if(!top.length){$('#candidateDiagnostics').innerHTML=`<div class="diag-head"><b>${esc(x.summary||'후보 데이터 없음')}</b><span class="diag-status">${esc(x.data_status||'대기')}</span></div><div class="sub">전체 스캔 후 기준에 근접한 후보가 생기면 여기에 표시됩니다.</div>`;return;}
+  const req=Number(x.required_score||top[0]?.required_score||0);
+  $('#candidateDiagnostics').innerHTML=`<div class="diag-head"><div><b>${x.accepted?'신규 주도 후보 감지':'왜 추천하지 않았나'}</b><div class="sub">필요 score ${req?req.toFixed(1):'-'}${x.required_probability_pct?` · 상승확률 ${Number(x.required_probability_pct).toFixed(1)}% 이상`:''}</div></div><span class="diag-status ${x.data_status==='ok'?'ok':''}">${esc(x.data_status||'ok')}</span></div><div class="diag-list">${top.slice(0,5).map((r,i)=>{const gap=Number(r.gap||0),prob=r.up_probability,er=r.expected_return_pct;return `<div class="diag-row"><div class="diag-rank">${i+1}</div><div class="diag-main"><div><b>${esc(r.name||r.code)}</b><span class="code">${esc(r.code)}</span></div><div class="diag-reasons">${(r.reasons||[]).slice(0,3).map(z=>`<span>${esc(z)}</span>`).join('')||'<span>점수 순위/선발 슬롯 기준</span>'}</div><div class="diag-extra">${prob!=null?`상승확률 ${Number(prob).toFixed(1)}% · `:''}${er!=null?`기대수익 ${pct(er)} · `:''}${r.change_pct!=null?`당일 ${pct(r.change_pct)}`:''}</div></div><div class="diag-score"><strong>${Number(r.score||0).toFixed(1)}</strong><small class="${gap>=0?'change pos':'change neg'}">${gap>=0?'+':''}${gap.toFixed(1)}</small></div></div>`}).join('')}</div>`;
 }
 
 function renderHome(d){
@@ -64,8 +98,10 @@ function renderHome(d){
   const leader=currentMarket==='KR'?d.replacement_candidate:(d.us?.replacement_candidate||null);
   if(leader && leader.code){const lc=currentMarket==='US'?'USD':'KRW';$('#leaderAlert').classList.remove('hidden');$('#leaderAlert').innerHTML=`<strong>⚡ 장중 신규 주도 후보</strong><div class="leader-grid"><div><div class="stock-name">${leader.name||leader.code}<span class="code">${leader.code}</span></div><div class="leader-price">${money(leader.price,lc)}</div></div><span class="leader-score">score ${Number(leader.score||0).toFixed(1)}</span></div><div class="sub">${leader.status||''}</div>`;} else $('#leaderAlert').classList.add('hidden');
   renderMacro(d.global_macro||{});
+  renderMarketPulse(d); renderDataHealth(d);
   const root=$('#recommendations');
-  root.innerHTML=!a.recs.length?'<div class="card"><b>현재 신규 추천 없음</b><div class="sub">기준을 통과한 종목이 없으면 현금 대기합니다.</div></div>':a.recs.map(r=>stockCard(r,a.currency)).join('');
+  root.innerHTML=!a.recs.length?'<div class="card no-rec"><b>현재 정식 추천 없음</b><div class="sub">스캔은 정상적으로 계속됩니다. 아래 <b>추천 보류 분석</b>에서 가장 근접한 후보와 탈락 이유를 확인하세요.</div></div>':a.recs.map(r=>stockCard(r,a.currency)).join('');
+  renderDiagnostics(d);
   $('#reportCount').textContent=currentMarket==='US'?'GLOBAL':fmt(a.reports.report_count);
   $('#brokerCount').textContent=currentMarket==='US'?'금리·FX·신용 반영':`${fmt(a.reports.broker_count)}개 증권사/기관`;
   $('#winRate').textContent=`${Number(a.learning.win_rate||0).toFixed(1)}%`; $('#avgReturn').textContent=`평균 ${pct(a.learning.avg_return_pct)}`;
@@ -87,11 +123,31 @@ async function openTab(tab){
   if(tab==='history'||tab==='learning'){if(currentMarket==='US')return openSheet('미국 모델 학습',`<div class="detail-card"><b>US 모델은 한국 모델과 완전히 분리 학습됩니다.</b><div class="row"><span>표본</span><strong>${a.learning.samples||0}</strong></div><div class="row"><span>승률</span><strong>${Number(a.learning.win_rate||0).toFixed(1)}%</strong></div></div>`);const d=await api('/api/history?days=20');return openSheet('추천 종목 사후평가',(d.items||[]).map(x=>`<div class="detail-card"><b>${x.trade_date} · ${x.name}</b><div class="row"><span>시가→종가</span><strong>${pct(x.open_to_close_pct)}</strong></div><div class="row"><span>MFE / MAE</span><strong>${pct(x.mfe_pct)} / ${pct(x.mae_pct)}</strong></div></div>`).join('')||'<div class="muted">평가 데이터 없음</div>')}
   if(tab==='settings')return openSettings(false);
 }
-function showMacro(){const d=dashboard?.global_macro||{};const rows=Object.entries(d.series||{}).map(([k,v])=>`<div class="row"><span>${k}</span><strong>${Number(v.value||0).toFixed(2)} · 5D ${Number(v.pct_5||0).toFixed(2)}%</strong></div>`).join('');const live=Object.entries(d.live?.rows||{}).map(([k,v])=>`<div class="row"><span>${k} (${v.symbol||''})</span><strong>${money(v.price||0,'USD')} · ${pct(v.change_pct||0)}</strong></div>`).join('');openSheet('글로벌 멀티에셋 상세',`<div class="detail-card"><b>${d.summary||'데이터 수집 중'}</b>${rows}</div><div class="detail-card"><b>15분 장중 프록시</b>${live||'<div class="muted">장중 프록시 수집 전</div>'}</div>`)}
+function showMacro(){const d=dashboard?.global_macro||{}, stale=new Set(d.stale_series||[]), hard=new Set(d.failures||[]);const rows=Object.entries(d.series||{}).map(([k,v])=>`<div class="row"><span>${k}${stale.has(k)?' · STALE':hard.has(k)?' · FAIL':''}</span><strong>${Number(v.value||0).toFixed(2)} · 5D ${Number(v.pct_5||0).toFixed(2)}%</strong></div>`).join('');const live=Object.entries(d.live?.rows||{}).map(([k,v])=>`<div class="row"><span>${k} (${v.symbol||''})${v.stale?' · STALE':''}</span><strong>${money(v.price||0,'USD')} · ${pct(v.change_pct||0)}</strong></div>`).join('');const key=d.api_key_status||'unknown';const health=`<div class="detail-card"><b>FRED 수집 상태</b><div class="row"><span>API key</span><strong>${esc(key)}</strong></div><div class="row"><span>fresh / stale / hard fail</span><strong>${Number(d.fresh_series_count||0)} / ${Number(d.stale_series_count||0)} / ${Number(d.hard_failure_count??d.failures?.length??0)}</strong></div><div class="row"><span>전송 실패(복구 포함)</span><strong>${Number(d.transport_failure_count||0)}</strong></div></div>`;openSheet('글로벌 멀티에셋 상세',`${health}<div class="detail-card"><b>${d.summary||'데이터 수집 중'}</b>${rows}</div><div class="detail-card"><b>15분 장중 프록시</b>${live||'<div class="muted">장중 프록시 수집 전</div>'}</div>`)}
 $('#macroMore').onclick=showMacro;
 $('#krTab').onclick=()=>{currentMarket='KR';$('#krTab').classList.add('active');$('#usTab').classList.remove('active');if(dashboard)renderHome(dashboard)};
 $('#usTab').onclick=()=>{currentMarket='US';$('#usTab').classList.add('active');$('#krTab').classList.remove('active');if(dashboard)renderHome(dashboard)};
-function openSettings(authOnly=false){const token=localStorage.getItem('krx_api_token')||'';const cloud=window.KRX_CLOUD_MODE;openSheet(authOnly?'서버 인증 필요':'설정',`${cloud?'':`<div class="detail-card"><b>서버 API 토큰</b><input id="tokenInput" class="token-box" type="password" value="${token}" placeholder="APP_API_TOKEN"><button id="saveToken" class="primary">저장 후 다시 연결</button></div>`}<div class="detail-card"><b>실행 모드</b><div class="row"><span>데이터 소스</span><strong>${cloud?'GitHub Actions + Supabase':'Local Python server'}</strong></div></div><div class="detail-card"><b>시장별 모니터링</b><div class="row"><span>한국 추천종목</span><strong>${dashboard?.monitor_interval_minutes||15}분</strong></div><div class="row"><span>미국 추천종목</span><strong>${dashboard?.us?.monitor_interval_minutes||15}분</strong></div><div class="row"><span>글로벌 매크로</span><strong>15분 캐시</strong></div><div class="sub">미국 시간은 New York timezone으로 계산되어 DST가 자동 반영됩니다.</div></div>`);setTimeout(()=>{const b=$('#saveToken');if(b)b.onclick=()=>{localStorage.setItem('krx_api_token',$('#tokenInput').value.trim());closeSheet();refresh()}},0)}
+function openSettings(authOnly=false){const token=localStorage.getItem('krx_api_token')||'';const cloud=window.KRX_CLOUD_MODE;const manualKey=localStorage.getItem('krx_manual_refresh_key')||'';openSheet(authOnly?'서버 인증 필요':'설정',`${cloud?'':`<div class="detail-card"><b>서버 API 토큰</b><input id="tokenInput" class="token-box" type="password" value="${token}" placeholder="APP_API_TOKEN"><button id="saveToken" class="primary">저장 후 다시 연결</button></div>`}${cloud?`<div class="detail-card"><b>즉시 갱신 인증키</b><input id="refreshKeyInput" class="token-box" type="password" value="${esc(manualKey)}" placeholder="MANUAL_REFRESH_KEY"><button id="saveRefreshKey" class="primary">이 기기에 저장</button><div class="sub">GitHub 토큰은 브라우저에 저장되지 않습니다. 이 키는 Supabase Edge Function에서만 검증됩니다.</div></div>`:''}<div class="detail-card"><b>실행 모드</b><div class="row"><span>데이터 소스</span><strong>${cloud?'GitHub Actions + Supabase':'Local Python server'}</strong></div></div><div class="detail-card"><b>시장별 모니터링</b><div class="row"><span>한국 추천종목</span><strong>${dashboard?.monitor_interval_minutes||15}분</strong></div><div class="row"><span>미국 추천종목</span><strong>${dashboard?.us?.monitor_interval_minutes||15}분</strong></div><div class="row"><span>글로벌 매크로</span><strong>15분 캐시</strong></div><div class="sub">↻ 버튼을 누르면 선택한 시장 + 글로벌 매크로 전체 갱신을 즉시 요청하고 완료될 때까지 자동 확인합니다.</div></div>`);setTimeout(()=>{const b=$('#saveToken');if(b)b.onclick=()=>{localStorage.setItem('krx_api_token',$('#tokenInput').value.trim());closeSheet();refresh()};const rb=$('#saveRefreshKey');if(rb)rb.onclick=()=>{localStorage.setItem('krx_manual_refresh_key',$('#refreshKeyInput').value.trim());closeSheet()}},0)}
 document.querySelectorAll('[data-tab]').forEach(el=>el.addEventListener('click',()=>openTab(el.dataset.tab)));
 async function refresh(){try{renderHome(await api('/api/dashboard'));if(!refreshTimer)armRefresh()}catch(e){$('#liveText').textContent='연결 실패';console.error(e)}}
+function sleep(ms){return new Promise(r=>setTimeout(r,ms))}
+async function manualRefresh(){
+  const btn=$('#manualRefreshBtn'); if(btn?.disabled)return;
+  if(!window.KRX_CLOUD_MODE){await refresh();return;}
+  const endpoint=(window.KRX_REFRESH_ENDPOINT||'').trim();
+  if(!endpoint){openSheet('즉시 갱신 설정 필요','<div class="detail-card">Supabase manual-refresh Edge Function을 먼저 배포해야 합니다.</div>');return;}
+  let key=localStorage.getItem('krx_manual_refresh_key')||'';
+  if(!key){key=(prompt('즉시 갱신 인증키(MANUAL_REFRESH_KEY)를 입력하세요.')||'').trim();if(!key)return;localStorage.setItem('krx_manual_refresh_key',key)}
+  const before=dashboard?.cloud?.generated_at||'';
+  try{
+    btn.disabled=true;btn.classList.add('busy');$('#liveText').textContent='업데이트 요청 중';
+    const r=await fetch(endpoint,{method:'POST',headers:{'Content-Type':'application/json','X-Refresh-Key':key},body:JSON.stringify({market:currentMarket})});
+    if(r.status===401){localStorage.removeItem('krx_manual_refresh_key');throw new Error('즉시 갱신 인증키가 맞지 않습니다. 설정에서 다시 입력하세요.')}
+    if(!r.ok){let detail='';try{detail=JSON.stringify(await r.json())}catch(_){detail=await r.text()}throw new Error(`갱신 요청 실패 ${r.status}: ${detail.slice(0,180)}`)}
+    $('#liveText').textContent='GitHub Actions 실행 중';
+    for(let i=0;i<48;i++){await sleep(5000);const next=await api('/api/dashboard');const after=next?.cloud?.generated_at||'';if(after && after!==before){renderHome(next);$('#liveText').textContent='방금 갱신 완료';setTimeout(()=>{if(dashboard)renderHome(dashboard)},2500);return}}
+    throw new Error('갱신 작업은 시작됐지만 4분 안에 게시 완료를 확인하지 못했습니다. Actions 실행 상태를 확인하세요.');
+  }catch(e){console.error(e);$('#liveText').textContent='갱신 실패';openSheet('즉시 갱신 실패',`<div class="detail-card">${esc(e.message||e)}</div>`)}finally{btn.disabled=false;btn.classList.remove('busy')}
+}
+$('#manualRefreshBtn').onclick=manualRefresh;
 if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});refresh();function armRefresh(){if(refreshTimer)clearInterval(refreshTimer);const sec=Math.max(10,Number(dashboard?.app_refresh_seconds||20));refreshTimer=setInterval(refresh,sec*1000)}setTimeout(armRefresh,1000);

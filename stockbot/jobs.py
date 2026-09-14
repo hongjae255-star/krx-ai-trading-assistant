@@ -465,6 +465,9 @@ class TradingAssistant:
             changed = True
             important = True
             self.db.set_state("last_replacement_candidate", replacement)
+        elif scan_replacement:
+            # Do not keep showing an old leader after a later full rescan says it no longer qualifies.
+            self.db.set_state("last_replacement_candidate", None)
 
         if force_summary or changed or important:
             self.notifier.send(self.format_intraday(updates, replacement))
@@ -485,9 +488,17 @@ class TradingAssistant:
                 float(self.settings.get("monitoring.new_leader_min_score", 68.0)),
             )
         weights = self.learner.current_weights()
+        scan_rows: dict[str, dict[str, Any]] = {}
+        filtered = 0
         try:
             rows = self.kis.volume_rank("0000")[:12] + self.kis.fluctuation_rank("0000")[:12]
-        except Exception:
+        except Exception as exc:
+            self.db.set_state("last_replacement_scan", {
+                "trade_date": self.today(), "phase": "intraday", "required_score": required_score,
+                "evaluated_count": 0, "filtered_count": 0, "top": [], "accepted": None,
+                "data_status": "api_error", "error": str(exc)[:240],
+                "ts": datetime.now(ZoneInfo(self.settings.timezone)).isoformat(timespec="seconds"),
+            })
             return None
         seen = set()
         for raw in rows:
@@ -500,12 +511,15 @@ class TradingAssistant:
                 q = self.kis.current_price(code)
                 name = q.get("name") or rr["name"]
                 if self._excluded(code, name):
+                    filtered += 1
                     continue
                 change = float(q.get("change_pct") or rr["change_pct"] or 0)
                 if change > float(self.settings.get("market.max_one_day_gain_pct", 15.0)):
+                    filtered += 1
                     continue
                 daily = self.kis.daily_chart(code, 30)
                 if daily.empty:
+                    filtered += 1
                     continue
                 today_reports = self.db.get_broker_reports(self.today())
                 rel_reports = [x for x in today_reports if str(x.get("code", "")) == code]
@@ -514,6 +528,15 @@ class TradingAssistant:
                 feats.update(self.macro.equity_features("KR"))
                 raw_sc = score(feats, weights)
                 final = risk_adjusted_score(raw_sc, change, five_day_return(daily), [])
+                scan_rows[code] = {
+                    "code": code, "name": name, "price": float(q.get("price") or 0),
+                    "change_pct": change, "score": round(final, 2),
+                    "required_score": round(required_score, 2),
+                    "gap": round(final - required_score, 2),
+                    "up_probability": None, "expected_return_pct": None,
+                    "risk_flags": [],
+                    "reasons": ([f"점수 {final:.1f} < 장중 기준 {required_score:.1f}"] if final < required_score else []),
+                }
                 if final < required_score:
                     continue
                 # Only now run DART/public-news local confirmation.
@@ -536,16 +559,42 @@ class TradingAssistant:
                 temp.features.update(self.macro.equity_features("KR"))
                 temp.raw_score = score(temp.features, weights)
                 temp.final_score = risk_adjusted_score(temp.raw_score, change, five_day_return(daily), temp.risk_flags)
+                reasons = []
+                if temp.final_score < required_score:
+                    reasons.append(f"이벤트 반영 후 점수 {temp.final_score:.1f} < 기준 {required_score:.1f}")
+                if temp.risk_flags:
+                    reasons.extend([f"risk: {x}" for x in temp.risk_flags[:3]])
+                scan_rows[code].update({
+                    "score": round(temp.final_score, 2), "gap": round(temp.final_score-required_score, 2),
+                    "risk_flags": temp.risk_flags, "reasons": reasons,
+                })
                 if temp.final_score >= required_score:
                     p = make_plan(temp, daily, self.cfg)
-                    return {
+                    accepted = {
                         "code": code, "name": name, "score": temp.final_score, "price": q["price"],
                         "status": "기존 최하위 후보보다 강한 신규 주도 후보",
                         "entry_low": p.entry_low_1, "entry_high": p.entry_high_1,
                         "chase_limit": p.chase_limit, "summary": temp.ai_summary,
                     }
-            except Exception:
+                    top = sorted(scan_rows.values(), key=lambda z: float(z.get("score", 0)), reverse=True)[:5]
+                    self.db.set_state("last_replacement_scan", {
+                        "trade_date": self.today(), "phase": "intraday", "required_score": required_score,
+                        "evaluated_count": len(scan_rows), "filtered_count": filtered, "top": top,
+                        "accepted": accepted, "data_status": "ok",
+                        "ts": datetime.now(ZoneInfo(self.settings.timezone)).isoformat(timespec="seconds"),
+                    })
+                    return accepted
+            except Exception as exc:
+                log.debug("replacement scan failed %s: %s", code, exc)
+                filtered += 1
                 continue
+        top = sorted(scan_rows.values(), key=lambda z: float(z.get("score", 0)), reverse=True)[:5]
+        self.db.set_state("last_replacement_scan", {
+            "trade_date": self.today(), "phase": "intraday", "required_score": required_score,
+            "evaluated_count": len(scan_rows), "filtered_count": filtered, "top": top,
+            "accepted": None, "data_status": "ok",
+            "ts": datetime.now(ZoneInfo(self.settings.timezone)).isoformat(timespec="seconds"),
+        })
         return None
 
     def format_intraday(self, updates: list[dict[str, Any]], replacement: dict[str, Any] | None) -> str:

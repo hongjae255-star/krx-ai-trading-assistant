@@ -104,11 +104,14 @@ global_macro:
   live_cache_seconds: 600
   # FRED network robustness. GitHub-hosted runners occasionally see transient
   # read timeouts to FRED; failed series reuse the last good cloud snapshot.
-  http_timeout_seconds: 15
-  http_connect_timeout_seconds: 5
-  max_retries: 2
+  http_timeout_seconds: 25
+  http_connect_timeout_seconds: 8
+  max_retries: 3
   retry_backoff_seconds: 1.5
-  max_workers: 6
+  # Official API can use moderate concurrency. Public graph fallback is deliberately
+  # gentler because GitHub-hosted runners are more likely to be throttled/time out.
+  max_workers_api: 4
+  max_workers_graph: 2
   live_proxies:
     spy: {symbol: SPY, exchange: NYS}
     qqq: {symbol: QQQ, exchange: NAS}
@@ -276,3 +279,9 @@ storage:
   model_dir: data/models
   us_sqlite_path: data/us_stockbot.sqlite3
   us_model_dir: data/us_models
+
+# v7.7 mobile decision dashboard: index charts + diagnostics.
+market_dashboard:
+  index_refresh_minutes: 30
+  index_chart_days: 30
+  rejected_candidate_count: 5

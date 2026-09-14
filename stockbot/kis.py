@@ -337,6 +337,80 @@ class KISClient:
             df = df.sort_values("date").tail(days).reset_index(drop=True)
         return df
 
+    def domestic_index_daily(self, index_code: str, days: int = 30) -> pd.DataFrame:
+        """KOSPI/KOSDAQ style index daily bars (read-only).
+
+        Official KIS codes include KOSPI=0001 and KOSDAQ=1001.
+        """
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=max(90, days * 2))).strftime("%Y%m%d")
+        body = self._get(
+            "/uapi/domestic-stock/v1/quotations/inquire-daily-indexchartprice",
+            "FHKUP03500100",
+            {
+                "FID_COND_MRKT_DIV_CODE": "U",
+                "FID_INPUT_ISCD": index_code,
+                "FID_INPUT_DATE_1": start,
+                "FID_INPUT_DATE_2": end,
+                "FID_PERIOD_DIV_CODE": "D",
+            },
+        )
+        rows = body.get("output2", []) or []
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+        rename = {
+            "stck_bsop_date": "date",
+            "bstp_nmix_oprc": "open",
+            "bstp_nmix_hgpr": "high",
+            "bstp_nmix_lwpr": "low",
+            "bstp_nmix_prpr": "close",
+            "acml_vol": "volume",
+            "acml_tr_pbmn": "turnover",
+        }
+        df = df.rename(columns=rename)
+        for c in ["open", "high", "low", "close", "volume", "turnover"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        if "date" in df.columns:
+            df = df.sort_values("date").tail(days).reset_index(drop=True)
+        return df
+
+    def overseas_index_daily(self, symbol: str, days: int = 30) -> pd.DataFrame:
+        """Overseas index daily bars using KIS' index/chart endpoint."""
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=max(90, days * 2))).strftime("%Y%m%d")
+        body = self._get(
+            "/uapi/overseas-price/v1/quotations/inquire-daily-chartprice",
+            "FHKST03030100",
+            {
+                "FID_COND_MRKT_DIV_CODE": "N",
+                "FID_INPUT_ISCD": symbol,
+                "FID_INPUT_DATE_1": start,
+                "FID_INPUT_DATE_2": end,
+                "FID_PERIOD_DIV_CODE": "D",
+            },
+        )
+        rows = body.get("output2", []) or []
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+        rename = {
+            "stck_bsop_date": "date",
+            "ovrs_nmix_oprc": "open",
+            "ovrs_nmix_hgpr": "high",
+            "ovrs_nmix_lwpr": "low",
+            "ovrs_nmix_prpr": "close",
+            "acml_vol": "volume",
+        }
+        df = df.rename(columns=rename)
+        for c in ["open", "high", "low", "close", "volume"]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        if "date" in df.columns:
+            df = df.sort_values("date").tail(days).reset_index(drop=True)
+        return df
+
     def intraday_chart(self, code: str, hour: str | None = None) -> pd.DataFrame:
         hour = hour or datetime.now().strftime("%H%M%S")
         body = self._get(

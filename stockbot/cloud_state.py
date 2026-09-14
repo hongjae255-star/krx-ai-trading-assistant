@@ -35,7 +35,7 @@ class SupabaseStorage:
         self.state_object = env("SUPABASE_STATE_OBJECT", "state/state_bundle.zip")
         self.timeout = float(settings.get("cloud.http_timeout_seconds", 30))
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.6"})
+        self.session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.7"})
 
     @property
     def configured(self) -> bool:

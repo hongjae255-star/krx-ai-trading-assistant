@@ -7,7 +7,7 @@ on:
         required: true
         default: publish
         type: choice
-        options: [publish, macro, research, kr-premarket, kr-intraday, kr-close, us-premarket, us-intraday, us-close]
+        options: [publish, macro, refresh-kr, refresh-us, research, kr-premarket, kr-intraday, kr-close, us-premarket, us-intraday, us-close]
       full_scan:
         description: Full market rescan for intraday jobs
         required: false

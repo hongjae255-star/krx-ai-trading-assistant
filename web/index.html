@@ -19,7 +19,10 @@
         <div class="eyebrow">GLOBAL AI TRADING ASSISTANT</div>
         <h1>시장 모니터링</h1>
       </div>
-      <div class="live-pill"><span class="dot"></span><span id="liveText">연결 중</span></div>
+      <div class="top-actions">
+        <button id="manualRefreshBtn" class="refresh-btn" type="button" aria-label="지금 데이터 갱신" title="지금 데이터 갱신">↻</button>
+        <div class="live-pill"><span class="dot"></span><span id="liveText">연결 중</span></div>
+      </div>
     </header>
 
     <main>
@@ -44,10 +47,19 @@
 
       <section class="section-head"><h2>글로벌 매크로</h2><button class="text-btn" id="macroMore">상세</button></section>
       <div id="macroCard" class="card macro-card"><div class="muted">금리·환율·변동성 데이터 대기 중</div></div>
+
+      <section class="section-head"><h2>시장 Pulse</h2><span id="healthBadge" class="health-badge">확인 중</span></section>
+      <div id="marketRegime" class="card pulse-summary"><div class="muted">지수 데이터 대기 중</div></div>
+      <div id="indexCharts" class="chart-grid"></div>
+      <div id="dataHealth" class="health-strip"></div>
+
       <section id="leaderAlert" class="leader card hidden"></section>
 
       <section class="section-head"><h2>오늘의 전략</h2><span id="lastUpdate" class="muted"></span></section>
       <div id="recommendations" class="stack"><div class="skeleton card"></div></div>
+
+      <section class="section-head"><h2>추천 보류 분석</h2><span id="scanSummary" class="muted"></span></section>
+      <div id="candidateDiagnostics" class="card diagnostics-card"><div class="muted">후보 스캔 기록 대기 중</div></div>
 
       <section class="grid2">
         <article class="card metric-card">

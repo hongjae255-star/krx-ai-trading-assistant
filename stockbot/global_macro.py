@@ -5,6 +5,8 @@ import json
 import logging
 import math
 import random
+import re
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
@@ -16,6 +18,7 @@ import requests
 
 from .config import Settings, env
 from .db import Database
+from .kis import KISNetworkError
 
 log = logging.getLogger(__name__)
 
@@ -73,13 +76,26 @@ class FREDClient:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.api_key = env("FRED_API_KEY")
-        self.timeout = float(settings.get("global_macro.http_timeout_seconds", 15))
-        self.connect_timeout = float(settings.get("global_macro.http_connect_timeout_seconds", 5))
-        self.max_retries = int(settings.get("global_macro.max_retries", 2))
+        raw_key = (env("FRED_API_KEY") or "").strip()
+        self.api_key = raw_key if re.fullmatch(r"[a-z0-9]{32}", raw_key) else ""
+        self.api_key_status = "valid" if self.api_key else ("invalid" if raw_key else "missing")
+        self.timeout = float(settings.get("global_macro.http_timeout_seconds", 25))
+        self.connect_timeout = float(settings.get("global_macro.http_connect_timeout_seconds", 8))
+        self.max_retries = int(settings.get("global_macro.max_retries", 3))
         self.retry_backoff = float(settings.get("global_macro.retry_backoff_seconds", 1.5))
-        self._session = requests.Session()
-        self._session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.4"})
+        # requests.Session is not guaranteed to be thread-safe. Each worker gets its
+        # own connection pool so concurrent FRED reads do not fight over one session.
+        self._thread_local = threading.local()
+
+    def _session(self) -> requests.Session:
+        session = getattr(self._thread_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.8"})
+            adapter = requests.adapters.HTTPAdapter(pool_connections=2, pool_maxsize=4, max_retries=0)
+            session.mount("https://", adapter)
+            self._thread_local.session = session
+        return session
 
     @property
     def api_mode(self) -> bool:
@@ -89,7 +105,7 @@ class FREDClient:
         last_exc: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                r = self._session.get(
+                r = self._session().get(
                     url,
                     params=params,
                     timeout=(self.connect_timeout, self.timeout),
@@ -205,14 +221,20 @@ class GlobalMacroEngine:
         if not force and as_of is None and self._cached and now - self._cached_at < self.cache_seconds:
             return self._cached
         rows: dict[str, dict[str, float]] = {}
-        failures: list[str] = []
+        hard_failures: list[str] = []
+        transport_failures: list[str] = []
         stale_series: list[str] = []
         previous = self.db.get_state(self.STATE_KEY, {}) if as_of is None else {}
         previous_series = previous.get("series", {}) if isinstance(previous, dict) else {}
 
-        # Fetch independently so one slow FRED endpoint cannot stall ~20 series
-        # sequentially for several minutes on a short-lived GitHub Actions runner.
-        workers = max(1, min(int(self.settings.get("global_macro.max_workers", 6)), len(self.series_map)))
+        # The unauthenticated graph endpoint is substantially more fragile under
+        # GitHub-hosted runners than the official API. Keep its concurrency low.
+        # A valid FRED key uses the official API with moderate parallelism.
+        requested_workers = int(self.settings.get(
+            "global_macro.max_workers_api" if self.fred.api_mode else "global_macro.max_workers_graph",
+            4 if self.fred.api_mode else 2,
+        ))
+        workers = max(1, min(requested_workers, len(self.series_map)))
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="fred") as pool:
             futures = {
                 pool.submit(self.fred.series, str(sid), 120, as_of): (name, sid)
@@ -223,13 +245,17 @@ class GlobalMacroEngine:
                 try:
                     rows[name] = self._stats(fut.result())
                 except Exception as exc:
-                    log.warning("macro series failed %s/%s: %s", name, sid, exc)
-                    failures.append(name)
+                    # A transport failure is not the same thing as a hard data failure.
+                    # If a previous successful snapshot exists, preserve it and mark it
+                    # stale instead of showing a zero or counting it twice as failed.
+                    log.warning("macro series transport failed %s/%s: %s", name, sid, exc)
+                    transport_failures.append(name)
                     old_stats = previous_series.get(name) if isinstance(previous_series, dict) else None
-                    if isinstance(old_stats, dict) and old_stats:
+                    if isinstance(old_stats, dict) and old_stats and float(old_stats.get("value", 0) or 0) != 0:
                         rows[name] = dict(old_stats)
                         stale_series.append(name)
                     else:
+                        hard_failures.append(name)
                         rows[name] = {
                             "value": 0.0, "chg_1": 0.0, "chg_5": 0.0,
                             "pct_1": 0.0, "pct_5": 0.0, "z60": 0.0,
@@ -293,12 +319,19 @@ class GlobalMacroEngine:
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "source": "FRED_API" if self.fred.api_mode else "FRED_GRAPH_CSV",
+            "api_key_status": self.fred.api_key_status,
             "vintage_safe": bool(self.fred.api_mode and as_of),
             "as_of": as_of,
-            "failures": failures,
+            # Backward-compatible `failures` now means true hard failures only.
+            # Network/API misses recovered from the last good snapshot are stale, not failed.
+            "failures": hard_failures,
+            "transport_failures": transport_failures,
             "stale_series": stale_series,
-            "fresh_series_count": len(self.series_map) - len(failures),
+            "fresh_series_count": len(self.series_map) - len(transport_failures),
             "stale_series_count": len(stale_series),
+            "hard_failure_count": len(hard_failures),
+            "transport_failure_count": len(transport_failures),
+            "total_series_count": len(self.series_map),
             "series": rows,
             "features": features,
             "summary": (

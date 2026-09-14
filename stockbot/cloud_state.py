@@ -35,7 +35,7 @@ class SupabaseStorage:
         self.state_object = env("SUPABASE_STATE_OBJECT", "state/state_bundle.zip")
         self.timeout = float(settings.get("cloud.http_timeout_seconds", 30))
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.2"})
+        self.session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.6"})
 
     @property
     def configured(self) -> bool:
@@ -131,9 +131,13 @@ class SupabaseStorage:
         self._raise_with_body(r, f"download {bucket}/{path}")
         return r.content
 
-    def upload(self, bucket: str, path: str, data: bytes, content_type: str = "application/octet-stream") -> None:
+    def upload(self, bucket: str, path: str, data: bytes, content_type: str = "application/octet-stream", cache_control: str | None = None) -> None:
         headers = self._headers(content_type)
         headers["x-upsert"] = "true"
+        if cache_control is not None:
+            # Supabase Storage stores this metadata and returns it to public clients.
+            # Frequent dashboard feeds must not sit in the browser/CDN for the default ~1h TTL.
+            headers["cache-control"] = cache_control
         r = self.session.post(
             self._object_url(bucket, path), headers=headers, data=data, timeout=self.timeout,
         )
@@ -146,7 +150,13 @@ class SupabaseStorage:
 
     def upload_json(self, path: str, obj: Any, public: bool = True) -> None:
         raw = json.dumps(obj, ensure_ascii=False, default=str, separators=(",", ":")).encode("utf-8")
-        self.upload(self.public_bucket if public else self.state_bucket, path, raw, "application/json; charset=utf-8")
+        self.upload(
+            self.public_bucket if public else self.state_bucket,
+            path,
+            raw,
+            "application/json; charset=utf-8",
+            cache_control="max-age=0, no-cache, no-store, must-revalidate" if public else None,
+        )
 
     def public_url(self, path: str) -> str:
         return self._object_url(self.public_bucket, path, public=True)

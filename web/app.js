@@ -49,8 +49,12 @@ function activeData(d){
 
 function renderHome(d){
   dashboard=d; const a=activeData(d);
-  $('#liveText').textContent=window.KRX_CLOUD_MODE?'클라우드 동기화':'서버 연결';
-  $('#serverTime').textContent=`${currentMarket==='US'?(d.us?.trade_date||d.trade_date):d.trade_date} · ${new Date(d.server_time).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}`;
+  const pubMs=d?.cloud?.generated_at ? new Date(d.cloud.generated_at).getTime() : 0;
+  const ageMin=pubMs ? Math.max(0,(Date.now()-pubMs)/60000) : null;
+  $('#liveText').textContent=window.KRX_CLOUD_MODE ? (ageMin!=null && ageMin>35 ? `클라우드 데이터 지연 ${Math.round(ageMin)}분` : '클라우드 동기화') : '서버 연결';
+  const publishedAt=d?.cloud?.generated_at ? new Date(d.cloud.generated_at) : null;
+  const publishedText=publishedAt && !Number.isNaN(publishedAt.getTime()) ? ` · 게시 ${publishedAt.toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}` : '';
+  $('#serverTime').textContent=`${currentMarket==='US'?(d.us?.trade_date||d.trade_date):d.trade_date} · ${new Date(d.server_time).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}${publishedText}`;
   $('#interval').textContent=a.interval;
   $('#lastUpdate').textContent=currentMarket==='US'?'미국 동부시간 자동 대응':(d.last_update?`최근 ${String(d.last_update).slice(11,16)}`:'장전');
   $('.eyebrow').textContent=currentMarket==='US'?'US + GLOBAL AI TRADING ASSISTANT':'KRX + GLOBAL AI TRADING ASSISTANT';

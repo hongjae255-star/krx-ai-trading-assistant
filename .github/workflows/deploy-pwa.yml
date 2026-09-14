@@ -1,30 +1,65 @@
-name: Deploy mobile PWA to Supabase
+name: Deploy mobile PWA to GitHub Pages
+
 on:
   push:
     branches: [main]
     paths:
       - 'web/**'
-      - 'stockbot/cloud_deploy.py'
       - '.github/workflows/deploy-pwa.yml'
   workflow_dispatch:
-concurrency:
-  group: krx-ai-pwa-deploy
-  cancel-in-progress: true
+
 permissions:
   contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
 jobs:
   deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     timeout-minutes: 8
     env:
-      FREE_MODE: 'true'
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Build static PWA
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${SUPABASE_URL:-}" || { echo "SUPABASE_URL secret is missing"; exit 1; }
+          rm -rf _site
+          mkdir -p _site
+          cp -R web/. _site/
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          base = os.environ['SUPABASE_URL'].rstrip('/') + '/storage/v1/object/public/krx-ai-public'
+          text = (
+              'window.KRX_CLOUD_MODE=true;\n'
+              f'window.KRX_DATA_BASE={json.dumps(base)};\n'
+          )
+          Path('_site/runtime-config.js').write_text(text, encoding='utf-8')
+          print('Runtime data base:', base)
+          PY
+          printf '\nBuilt files:\n'
+          find _site -maxdepth 2 -type f -print | sort
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
-          python-version: '3.11'
-          cache: pip
-      - run: pip install -r requirements.txt
-      - run: python -m stockbot.cloud_deploy
+          path: ./_site
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

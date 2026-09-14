@@ -102,7 +102,13 @@ global_macro:
   enabled: true
   cache_seconds: 900
   live_cache_seconds: 600
-  http_timeout_seconds: 10
+  # FRED network robustness. GitHub-hosted runners occasionally see transient
+  # read timeouts to FRED; failed series reuse the last good cloud snapshot.
+  http_timeout_seconds: 15
+  http_connect_timeout_seconds: 5
+  max_retries: 2
+  retry_backoff_seconds: 1.5
+  max_workers: 6
   live_proxies:
     spy: {symbol: SPY, exchange: NYS}
     qqq: {symbol: QQQ, exchange: NAS}
@@ -113,8 +119,9 @@ global_macro:
     dollar: {symbol: UUP, exchange: NYS}
     gold: {symbol: GLD, exchange: NYS}
     oil: {symbol: USO, exchange: NYS}
-  # FRED_API_KEY is optional. Without it, current-vintage public graph CSV is used.
-  # With a free key, as-of/vintage-safe historical retrieval can be enabled.
+  # FRED_API_KEY is strongly recommended for GitHub Actions. Without it, current-vintage
+  # public graph CSV is used as a fallback. With a free key, the official API is primary
+  # and as-of/vintage-safe historical retrieval is available.
   series: {}
 
 us_market:

@@ -4,7 +4,9 @@ import io
 import json
 import logging
 import math
+import random
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -72,53 +74,89 @@ class FREDClient:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.api_key = env("FRED_API_KEY")
-        self.timeout = float(settings.get("global_macro.http_timeout_seconds", 10))
+        self.timeout = float(settings.get("global_macro.http_timeout_seconds", 15))
+        self.connect_timeout = float(settings.get("global_macro.http_connect_timeout_seconds", 5))
+        self.max_retries = int(settings.get("global_macro.max_retries", 2))
+        self.retry_backoff = float(settings.get("global_macro.retry_backoff_seconds", 1.5))
         self._session = requests.Session()
-        self._session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/6.0"})
+        self._session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.4"})
 
     @property
     def api_mode(self) -> bool:
         return bool(self.api_key)
 
+    def _get_with_retry(self, url: str, *, params: dict[str, Any]) -> requests.Response:
+        last_exc: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                r = self._session.get(
+                    url,
+                    params=params,
+                    timeout=(self.connect_timeout, self.timeout),
+                )
+                if r.status_code in {429, 500, 502, 503, 504}:
+                    raise requests.HTTPError(
+                        f"retryable HTTP {r.status_code}: {r.text[:250]}", response=r
+                    )
+                r.raise_for_status()
+                return r
+            except (requests.Timeout, requests.ConnectionError, requests.HTTPError) as exc:
+                last_exc = exc
+                if attempt >= self.max_retries:
+                    break
+                sleep_s = self.retry_backoff * (2 ** attempt) + random.uniform(0.0, 0.4)
+                time.sleep(sleep_s)
+        assert last_exc is not None
+        raise last_exc
+
+    def _official_api_series(self, series_id: str, start: str, as_of: str | None) -> pd.DataFrame:
+        params: dict[str, Any] = {
+            "series_id": series_id,
+            "api_key": self.api_key,
+            "file_type": "json",
+            "observation_start": start,
+            "sort_order": "asc",
+        }
+        if as_of:
+            params["realtime_start"] = as_of
+            params["realtime_end"] = as_of
+        r = self._get_with_retry(
+            "https://api.stlouisfed.org/fred/series/observations", params=params
+        )
+        rows = r.json().get("observations", [])
+        return pd.DataFrame({
+            "date": [x.get("date") for x in rows],
+            "value": [x.get("value") for x in rows],
+        })
+
+    def _graph_csv_series(self, series_id: str, start: str) -> pd.DataFrame:
+        r = self._get_with_retry(
+            "https://fred.stlouisfed.org/graph/fredgraph.csv",
+            params={"id": series_id, "cosd": start},
+        )
+        raw = pd.read_csv(io.StringIO(r.text))
+        if raw.empty:
+            return pd.DataFrame(columns=["date", "value"])
+        date_col = raw.columns[0]
+        value_col = raw.columns[-1]
+        return raw.rename(columns={date_col: "date", value_col: "value"})[["date", "value"]]
+
     def series(self, series_id: str, days: int = 120, as_of: str | None = None) -> pd.DataFrame:
         start = (datetime.now(timezone.utc).date() - timedelta(days=max(days * 2, 180))).isoformat()
         if self.api_key:
-            params = {
-                "series_id": series_id,
-                "api_key": self.api_key,
-                "file_type": "json",
-                "observation_start": start,
-                "sort_order": "asc",
-            }
-            if as_of:
-                # ALFRED/FRED real-time period: only information known as of this date.
-                params["realtime_start"] = as_of
-                params["realtime_end"] = as_of
-            r = self._session.get(
-                "https://api.stlouisfed.org/fred/series/observations",
-                params=params,
-                timeout=self.timeout,
-            )
-            r.raise_for_status()
-            rows = r.json().get("observations", [])
-            df = pd.DataFrame({"date": [x.get("date") for x in rows], "value": [x.get("value") for x in rows]})
+            try:
+                df = self._official_api_series(series_id, start, as_of)
+            except Exception:
+                # For current snapshots only, fall back to public graph CSV if the
+                # official API is temporarily unavailable. Historical as-of queries
+                # must never fall back because that would lose vintage safety.
+                if as_of is not None:
+                    raise
+                df = self._graph_csv_series(series_id, start)
         else:
-            # No API key required for the graph export. This is current-vintage only.
-            r = self._session.get(
-                "https://fred.stlouisfed.org/graph/fredgraph.csv",
-                params={"id": series_id, "cosd": start},
-                timeout=self.timeout,
-            )
-            r.raise_for_status()
-            raw = pd.read_csv(io.StringIO(r.text))
-            if raw.empty:
-                return pd.DataFrame(columns=["date", "value"])
-            date_col = raw.columns[0]
-            value_col = raw.columns[-1]
-            df = raw.rename(columns={date_col: "date", value_col: "value"})[["date", "value"]]
+            df = self._graph_csv_series(series_id, start)
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.dropna(subset=["value"]).tail(days).reset_index(drop=True)
-        return df
+        return df.dropna(subset=["value"]).tail(days).reset_index(drop=True)
 
 
 class GlobalMacroEngine:
@@ -168,13 +206,34 @@ class GlobalMacroEngine:
             return self._cached
         rows: dict[str, dict[str, float]] = {}
         failures: list[str] = []
-        for name, sid in self.series_map.items():
-            try:
-                rows[name] = self._stats(self.fred.series(str(sid), 120, as_of=as_of))
-            except Exception as exc:
-                log.warning("macro series failed %s/%s: %s", name, sid, exc)
-                failures.append(name)
-                rows[name] = {"value": 0.0, "chg_1": 0.0, "chg_5": 0.0, "pct_1": 0.0, "pct_5": 0.0, "z60": 0.0}
+        stale_series: list[str] = []
+        previous = self.db.get_state(self.STATE_KEY, {}) if as_of is None else {}
+        previous_series = previous.get("series", {}) if isinstance(previous, dict) else {}
+
+        # Fetch independently so one slow FRED endpoint cannot stall ~20 series
+        # sequentially for several minutes on a short-lived GitHub Actions runner.
+        workers = max(1, min(int(self.settings.get("global_macro.max_workers", 6)), len(self.series_map)))
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="fred") as pool:
+            futures = {
+                pool.submit(self.fred.series, str(sid), 120, as_of): (name, sid)
+                for name, sid in self.series_map.items()
+            }
+            for fut in as_completed(futures):
+                name, sid = futures[fut]
+                try:
+                    rows[name] = self._stats(fut.result())
+                except Exception as exc:
+                    log.warning("macro series failed %s/%s: %s", name, sid, exc)
+                    failures.append(name)
+                    old_stats = previous_series.get(name) if isinstance(previous_series, dict) else None
+                    if isinstance(old_stats, dict) and old_stats:
+                        rows[name] = dict(old_stats)
+                        stale_series.append(name)
+                    else:
+                        rows[name] = {
+                            "value": 0.0, "chg_1": 0.0, "chg_5": 0.0,
+                            "pct_1": 0.0, "pct_5": 0.0, "z60": 0.0,
+                        }
 
         def v(name: str, field: str = "value") -> float:
             return float(rows.get(name, {}).get(field, 0.0) or 0.0)
@@ -237,6 +296,9 @@ class GlobalMacroEngine:
             "vintage_safe": bool(self.fred.api_mode and as_of),
             "as_of": as_of,
             "failures": failures,
+            "stale_series": stale_series,
+            "fresh_series_count": len(self.series_map) - len(failures),
+            "stale_series_count": len(stale_series),
             "series": rows,
             "features": features,
             "summary": (

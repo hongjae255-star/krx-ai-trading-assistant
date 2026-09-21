@@ -55,7 +55,25 @@
 
       <section id="leaderAlert" class="leader card hidden"></section>
 
-      <section class="section-head"><h2>오늘의 전략</h2><span id="lastUpdate" class="muted"></span></section>
+      <section class="section-head"><h2>듀얼 전략 후보</h2><span class="muted">항상 Top 3 표시</span></section>
+      <div class="strategy-note card"><b>수익 목표 ≠ 보장 수익</b><span>당일 전략은 거래비용까지 감안해 순 +1%를 목표로 설계하고, 1–2주 전략은 5–10거래일의 추세·모멘텀·수급·시장환경을 평가합니다. 기준 미달은 WATCH로 표시합니다.</span></div>
+      <div class="lane-grid">
+        <section class="lane-panel">
+          <div class="lane-head"><div><span class="lane-kicker">INTRADAY</span><h3>하루 +1% 목표</h3></div><span id="dayLaneCount" class="lane-count">대기</span></div>
+          <div id="dayLane" class="lane-stack"><div class="card lane-empty muted">후보 생성 대기 중</div></div>
+        </section>
+        <section class="lane-panel">
+          <div class="lane-head"><div><span class="lane-kicker">SWING</span><h3>1–2주 상승 후보</h3></div><span id="swingLaneCount" class="lane-count">대기</span></div>
+          <div id="swingLane" class="lane-stack"><div class="card lane-empty muted">후보 생성 대기 중</div></div>
+        </section>
+      </div>
+
+      <section id="institutionalSection" class="hidden">
+        <section class="section-head"><h2>유명 투자회사 13F</h2><span id="institutionalStatus" class="muted"></span></section>
+        <div id="institutional13f" class="card institutional-card"><div class="muted">SEC 13F 데이터 대기 중</div></div>
+      </section>
+
+      <section class="section-head"><h2>엄격 실행 전략</h2><span id="lastUpdate" class="muted"></span></section>
       <div id="recommendations" class="stack"><div class="skeleton card"></div></div>
 
       <section class="section-head"><h2>추천 보류 분석</h2><span id="scanSummary" class="muted"></span></section>

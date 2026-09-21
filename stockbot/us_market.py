@@ -22,6 +22,8 @@ from .predictor import PredictiveEnsemble
 from .regime import attach_regime_features, infer_market_regime
 from .scoring import five_day_return, risk_adjusted_score, score
 from .features import atr
+from .strategy_lanes import DualStrategyEngine
+from .institutional import InstitutionalTracker
 
 log = logging.getLogger(__name__)
 
@@ -84,9 +86,26 @@ class USMarketAssistant:
         self.predictor = PredictiveEnsemble(self.db, self.cfg, settings.path("storage.us_model_dir"))
         self.notifier = TelegramNotifier()
         self.tz = ZoneInfo("America/New_York")
+        self.strategy_lanes = DualStrategyEngine(settings)
+        self.institutional = InstitutionalTracker(settings, self.db)
 
     def today(self) -> str:
         return datetime.now(self.tz).date().isoformat()
+
+    def _deep_daily(self, candidate: Candidate, days: int) -> pd.DataFrame:
+        exmap = self.db.get_state(f"us_exchange_map:{self.today()}", {}) or {}
+        ex = str(exmap.get(candidate.code, "NAS"))
+        return self.kis.overseas_daily_chart(candidate.code, ex, days)
+
+    def update_strategy_lanes(self, candidates: list[Candidate], daily_map: dict[str, pd.DataFrame], include_swing: bool = True) -> dict[str, Any]:
+        prev = self.db.get_state("us_strategy_lanes_latest", {}) or {}
+        out = self.strategy_lanes.build(
+            candidates, daily_map, "US", deep_history_fetcher=self._deep_daily,
+            institutional_matcher=self.institutional.match, include_swing=include_swing,
+            previous_swing=prev.get("swing"),
+        )
+        self.db.set_state("us_strategy_lanes_latest", out)
+        return out
 
     def discover(self) -> tuple[list[Candidate], dict[str,pd.DataFrame], str, dict[str,str]]:
         weights = self.learner.current_weights(); market_cfg = self.cfg.get("market", {})
@@ -151,6 +170,14 @@ class USMarketAssistant:
         if not cands:
             self.notifier.send(f"🇺🇸 [{td}] US premarket: candidates unavailable\n{summary}"); return []
         self.db.save_candidate_snapshots(td,cands); self.db.set_state(f"us_exchange_map:{td}",exmap)
+        try:
+            self.institutional.refresh(force=False)
+        except Exception as exc:
+            log.warning("SEC 13F refresh failed: %s", exc)
+        try:
+            self.update_strategy_lanes(cands, dmap, include_swing=True)
+        except Exception as exc:
+            log.warning("US dual strategy lane refresh failed: %s", exc)
         n=int(self.settings.get("us_market.market.final_pick_count",3)); min_score=float(self.settings.get("us_market.minimum_final_score",60))
         selected=[c for c in cands if c.final_score>=min_score][:n]
         plans=self._allocate([make_us_plan(c,dmap[c.code],self.cfg) for c in selected]); self.db.save_recommendations(td,plans)
@@ -174,6 +201,10 @@ class USMarketAssistant:
         current_best = max([float(r.get("score", 0) or 0) for r in current_recs] or [0.0])
         cands, dmap, summary, exmap = self.discover()
         self.db.set_state(f"us_exchange_map:{self.today()}", {**(self.db.get_state(f"us_exchange_map:{self.today()}", {}) or {}), **exmap})
+        try:
+            self.update_strategy_lanes(cands, dmap, include_swing=False)
+        except Exception as exc:
+            log.warning("US intraday strategy lane refresh failed: %s", exc)
         min_score = float(self.settings.get("us_market.minimum_final_score", 58.0))
         edge = float(self.settings.get("us_market.replacement_min_score_edge", 4.0))
         required = max(min_score, current_best + edge if current_best else min_score)
@@ -261,10 +292,36 @@ class USMarketAssistant:
                 f"score {replacement['score']:.1f} | 관심 ${replacement['entry_low']:.2f}~${replacement['entry_high']:.2f} | "
                 f"추격금지 ${replacement['chase_limit']:.2f}"
             )
-        if force_summary and (updates or replacement):
-            lines=[f"🇺🇸 {td} US intraday update"]+[f"• {x['name']} ${x['price']:.2f} | {x['status']} | VWAP ${x['vwap']:.2f}" for x in updates]
+        if force_summary:
+            now_txt = datetime.now(self.tz).strftime("%H:%M")
+            lines=[f"🇺🇸 {td} {now_txt} ET · 15분 업데이트"]
+            lines += [f"• {x['name']} ${x['price']:.2f} | {x['status']} | VWAP ${x['vwap']:.2f}" for x in updates]
             if replacement:
                 lines.append(f"⚡ 신규 후보 {replacement['name']} ${replacement['price']:.2f} (score {replacement['score']:.1f})")
+            elif not updates:
+                lines.append("📭 현재 정식 추천 종목 없음 · 엄격 실행기준 통과 없음")
+                lanes = self.db.get_state("us_strategy_lanes_latest", {}) or {}
+                day_items = list(((lanes.get("day_1pct") or {}).get("items") or []))
+                swing_items = list(((lanes.get("swing") or {}).get("items") or []))
+                if day_items:
+                    x = day_items[0]
+                    lines.append(f"🎯 +1% target: {x.get('name', x.get('code'))} | {x.get('status')} | {float(x.get('score',0)):.1f}")
+                if swing_items:
+                    x = swing_items[0]
+                    lines.append(f"📈 1–2w swing: {x.get('name', x.get('code'))} | {x.get('status')} | {float(x.get('score',0)):.1f}")
+                scan = self.db.get_state("us_last_replacement_scan", {}) or {}
+                top = list(scan.get("top", []) or [])
+                if top:
+                    best = top[0]
+                    lines.append(
+                        f"가장 가까운 후보: {best.get('name', best.get('code', '-'))} "
+                        f"score {float(best.get('score', 0) or 0):.1f} / 필요 {float(best.get('required_score', 0) or 0):.1f}"
+                    )
+                elif scan.get("data_status") in {"network_stale", "api_error"}:
+                    lines.append("⚠️ 후보 스캔 데이터 지연 — 이전 상태 유지")
+                else:
+                    lines.append("신규 기준 통과 종목 없음")
+            lines.append("✅ 15분 모니터 정상 실행")
             self.notifier.send("\n".join(lines))
         return updates
 
@@ -300,4 +357,9 @@ class USMarketAssistant:
         return result
 
     def status(self)->dict[str,Any]:
-        return {"market":"US","trade_date":self.today(),"predictive_model":self.predictor.status(),"last_close":self.db.get_state("us_last_close",{}),"recommendations":self.db.get_recommendations(self.today())}
+        return {
+            "market":"US","trade_date":self.today(),"predictive_model":self.predictor.status(),
+            "last_close":self.db.get_state("us_last_close",{}),"recommendations":self.db.get_recommendations(self.today()),
+            "strategy_lanes": self.db.get_state("us_strategy_lanes_latest", {}) or {},
+            "institutional": self.institutional.latest(),
+        }

@@ -46,8 +46,8 @@ function renderMacro(d){
 }
 
 function activeData(d){
-  if(currentMarket==='US') return {recs:d.us?.recommendations||[], learning:d.us?.learning||{}, interval:d.us?.monitor_interval_minutes||15, reports:{report_count:0,broker_count:0,top:[]}, currency:'USD'};
-  return {recs:d.recommendations||[], learning:d.learning||{}, interval:d.monitor_interval_minutes||15, reports:d.reports||{}, currency:'KRW'};
+  if(currentMarket==='US') return {recs:d.us?.recommendations||[], learning:d.us?.learning||{}, interval:d.us?.monitor_interval_minutes||15, reports:{report_count:0,broker_count:0,top:[]}, currency:'USD', lanes:d.us?.strategy_lanes||{}, institutional:d.us?.institutional||{}};
+  return {recs:d.recommendations||[], learning:d.learning||{}, interval:d.monitor_interval_minutes||15, reports:d.reports||{}, currency:'KRW', lanes:d.strategy_lanes||{}, institutional:{}};
 }
 
 const esc = v => String(v??'').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -81,6 +81,42 @@ function renderDiagnostics(d){
   $('#candidateDiagnostics').innerHTML=`<div class="diag-head"><div><b>${x.accepted?'신규 주도 후보 감지':'왜 추천하지 않았나'}</b><div class="sub">필요 score ${req?req.toFixed(1):'-'}${x.required_probability_pct?` · 상승확률 ${Number(x.required_probability_pct).toFixed(1)}% 이상`:''}</div></div><span class="diag-status ${x.data_status==='ok'?'ok':''}">${esc(x.data_status||'ok')}</span></div><div class="diag-list">${top.slice(0,5).map((r,i)=>{const gap=Number(r.gap||0),prob=r.up_probability,er=r.expected_return_pct;return `<div class="diag-row"><div class="diag-rank">${i+1}</div><div class="diag-main"><div><b>${esc(r.name||r.code)}</b><span class="code">${esc(r.code)}</span></div><div class="diag-reasons">${(r.reasons||[]).slice(0,3).map(z=>`<span>${esc(z)}</span>`).join('')||'<span>점수 순위/선발 슬롯 기준</span>'}</div><div class="diag-extra">${prob!=null?`상승확률 ${Number(prob).toFixed(1)}% · `:''}${er!=null?`기대수익 ${pct(er)} · `:''}${r.change_pct!=null?`당일 ${pct(r.change_pct)}`:''}</div></div><div class="diag-score"><strong>${Number(r.score||0).toFixed(1)}</strong><small class="${gap>=0?'change pos':'change neg'}">${gap>=0?'+':''}${gap.toFixed(1)}</small></div></div>`}).join('')}</div>`;
 }
 
+
+function laneStatusBadge(status){
+  const action=String(status||'WATCH').toUpperCase()==='ACTIONABLE';
+  return `<span class="lane-badge ${action?'action':'watch'}">${action?'조건 충족':'WATCH'}</span>`;
+}
+function laneCard(r,type,currency){
+  const score=Number(r.score||0), req=Number(r.required_score||0), gap=score-req;
+  const strengths=(r.strengths||[]).slice(0,5).map(x=>`<span>${esc(x)}</span>`).join('');
+  const reasons=(r.reasons||[]).slice(0,3).map(x=>`<li>${esc(x)}</li>`).join('');
+  const inst=(r.institutional?.matches||[]).slice(0,3).map(x=>`${esc(x.manager)} ${esc(x.change||'HOLD')}`).join(' · ');
+  if(type==='day'){
+    return `<article class="card lane-card"><div class="lane-card-top"><div><div class="stock-name">${esc(r.name||r.code)}<span class="code">${esc(r.code)}</span></div><div class="lane-price">${money(r.reference_price,currency)} <span class="change ${Number(r.change_pct||0)>=0?'pos':'neg'}">${pct(r.change_pct||0)}</span></div></div>${laneStatusBadge(r.status)}</div><div class="lane-scoreline"><strong>${score.toFixed(1)}</strong><span>필요 ${req.toFixed(1)} · <b class="${gap>=0?'change pos':'change neg'}">${gap>=0?'+':''}${gap.toFixed(1)}</b></span></div><div class="lane-metrics"><div><span>순 목표</span><b>+${Number(r.net_target_pct||1).toFixed(2)}%</b></div><div><span>가격 목표</span><b>${money(r.target_price,currency)}</b></div><div><span>계획 손절</span><b>-${Number(r.stop_pct||0).toFixed(2)}%</b></div><div><span>ATR</span><b>${Number(r.atr_pct||0).toFixed(2)}%</b></div></div><div class="strength-tags">${strengths}</div>${reasons?`<ul class="lane-reasons">${reasons}</ul>`:''}<div class="lane-warning">${esc(r.warning||'+1%는 목표치이며 보장되지 않습니다.')}</div></article>`;
+  }
+  return `<article class="card lane-card swing"><div class="lane-card-top"><div><div class="stock-name">${esc(r.name||r.code)}<span class="code">${esc(r.code)}</span></div><div class="lane-price">${money(r.reference_price,currency)}</div></div>${laneStatusBadge(r.status)}</div><div class="lane-scoreline"><strong>${score.toFixed(1)}</strong><span>필요 ${req.toFixed(1)} · <b class="${gap>=0?'change pos':'change neg'}">${gap>=0?'+':''}${gap.toFixed(1)}</b></span></div><div class="lane-metrics"><div><span>Trend</span><b>${esc(r.trend_template||'-')}</b></div><div><span>20D</span><b class="${Number(r.return_20d_pct||0)>=0?'change pos':'change neg'}">${pct(r.return_20d_pct||0)}</b></div><div><span>60D</span><b class="${Number(r.return_60d_pct||0)>=0?'change pos':'change neg'}">${pct(r.return_60d_pct||0)}</b></div><div><span>RS proxy</span><b>${Number(r.rs_proxy_pct||0).toFixed(0)}</b></div></div><div class="strength-tags">${strengths}</div>${inst?`<div class="institution-chip">13F · ${inst}</div>`:''}${reasons?`<ul class="lane-reasons">${reasons}</ul>`:''}<div class="lane-warning">${esc(r.warning||'1–2주 상승 가능성 점수이며 보장되지 않습니다.')}</div></article>`;
+}
+function renderStrategyLanes(d){
+  const a=activeData(d), lanes=a.lanes||{}, day=lanes.day_1pct||{}, swing=lanes.swing||{};
+  const dayItems=day.items||[], swingItems=swing.items||[];
+  $('#dayLaneCount').textContent=dayItems.length?`${Number(day.actionable_count||0)} 충족 / ${dayItems.length} 표시`:'대기';
+  $('#swingLaneCount').textContent=swingItems.length?`${Number(swing.actionable_count||0)} 충족 / ${swingItems.length} 표시`:'대기';
+  $('#dayLane').innerHTML=dayItems.length?dayItems.map(r=>laneCard(r,'day',a.currency)).join(''):'<div class="card lane-empty"><b>후보 생성 대기</b><div class="sub">장전 또는 전체 스캔이 완료되면 기준 미달 종목도 WATCH로 Top 3가 표시됩니다.</div></div>';
+  $('#swingLane').innerHTML=swingItems.length?swingItems.map(r=>laneCard(r,'swing',a.currency)).join(''):'<div class="card lane-empty"><b>후보 생성 대기</b><div class="sub">장전 분석에서 5–10거래일 후보를 생성합니다. 장기 일봉 수집 실패 시에도 가능한 범위에서 WATCH 후보를 유지합니다.</div></div>';
+}
+function renderInstitutional(d){
+  const sec=$('#institutionalSection');
+  if(currentMarket!=='US'){sec.classList.add('hidden');return;}
+  sec.classList.remove('hidden');
+  const st=d.us?.institutional||{}, managers=st.managers||[];
+  $('#institutionalStatus').textContent=st.status==='ok'?'SEC 최신 수집':st.status==='partial'?'일부 수집':st.status==='setup_needed'?'설정 필요':st.status||'대기';
+  if(st.status==='setup_needed'){
+    $('#institutional13f').innerHTML=`<b>SEC_USER_AGENT 설정 필요</b><div class="sub">GitHub Secret에 연락 가능한 이메일을 포함한 User-Agent를 넣으면 Berkshire, Bridgewater, ARK, Pershing Square, Baupost의 13F를 추적합니다.</div><div class="lane-warning">13F는 실시간 매매내역이 아니라 분기 공시이며 최대 45일 늦을 수 있습니다.</div>`;return;
+  }
+  if(!managers.length){$('#institutional13f').innerHTML='<div class="muted">13F 데이터 대기 중</div>';return;}
+  $('#institutional13f').innerHTML=`<div class="institution-list">${managers.map(m=>{const changes=(m.changes||[]).slice(0,4);return `<div class="institution-row"><div><b>${esc(m.name)}</b><div class="sub">보고 ${esc(m.report_date||'-')} · 제출 ${esc(m.filing_date||'-')} · ${Number(m.holdings_count||0)}종목</div></div><div class="institution-changes">${changes.map(x=>`<span class="${['NEW','ADD'].includes(x.change)?'up':['EXIT','REDUCE'].includes(x.change)?'down':''}">${esc(x.change)} ${esc(x.issuer)}</span>`).join('')||'<span>변동 데이터 없음</span>'}</div></div>`}).join('')}</div><div class="lane-warning">${esc(st.limitations||'13F는 분기 공시라 실시간 매매와 차이가 있을 수 있습니다.')}</div>`;
+}
+
 function renderHome(d){
   dashboard=d; const a=activeData(d);
   const pubMs=d?.cloud?.generated_at ? new Date(d.cloud.generated_at).getTime() : 0;
@@ -99,8 +135,9 @@ function renderHome(d){
   if(leader && leader.code){const lc=currentMarket==='US'?'USD':'KRW';$('#leaderAlert').classList.remove('hidden');$('#leaderAlert').innerHTML=`<strong>⚡ 장중 신규 주도 후보</strong><div class="leader-grid"><div><div class="stock-name">${leader.name||leader.code}<span class="code">${leader.code}</span></div><div class="leader-price">${money(leader.price,lc)}</div></div><span class="leader-score">score ${Number(leader.score||0).toFixed(1)}</span></div><div class="sub">${leader.status||''}</div>`;} else $('#leaderAlert').classList.add('hidden');
   renderMacro(d.global_macro||{});
   renderMarketPulse(d); renderDataHealth(d);
+  renderStrategyLanes(d); renderInstitutional(d);
   const root=$('#recommendations');
-  root.innerHTML=!a.recs.length?'<div class="card no-rec"><b>현재 정식 추천 없음</b><div class="sub">스캔은 정상적으로 계속됩니다. 아래 <b>추천 보류 분석</b>에서 가장 근접한 후보와 탈락 이유를 확인하세요.</div></div>':a.recs.map(r=>stockCard(r,a.currency)).join('');
+  root.innerHTML=!a.recs.length?'<div class="card no-rec"><b>엄격 실행기준 통과 종목 없음</b><div class="sub">오류가 아닙니다. 위 <b>듀얼 전략 후보</b>에는 기준 미달도 WATCH로 계속 표시되며, 아래 진단에서 탈락 이유를 확인할 수 있습니다.</div></div>':a.recs.map(r=>stockCard(r,a.currency)).join('');
   renderDiagnostics(d);
   $('#reportCount').textContent=currentMarket==='US'?'GLOBAL':fmt(a.reports.report_count);
   $('#brokerCount').textContent=currentMarket==='US'?'금리·FX·신용 반영':`${fmt(a.reports.broker_count)}개 증권사/기관`;
@@ -118,7 +155,12 @@ function openSheet(title,html){$('#sheetTitle').textContent=title;$('#sheetConte
 async function openTab(tab){
   document.querySelectorAll('.nav-item').forEach(x=>x.classList.toggle('active',x.dataset.tab===tab)); if(tab==='home')return window.scrollTo({top:0,behavior:'smooth'});
   const a=activeData(dashboard||{}), c=a.currency;
-  if(tab==='strategy') return openSheet(`${currentMarket==='US'?'미국':'한국'} 오늘의 전략`,a.recs.map(r=>`<div class="detail-card"><b>${r.name} (${r.code})</b><div class="row"><span>현재 상태</span><strong>${r.live?.status||'장전'}</strong></div><div class="row"><span>1차 관심</span><strong>${money(r.entry_low_1,c)} ~ ${money(r.entry_high_1,c)}</strong></div><div class="row"><span>추격 금지</span><strong>${money(r.chase_limit,c)}</strong></div><div class="row"><span>손절/무효</span><strong>${money(r.stop_price,c)}</strong></div><div class="row"><span>목표</span><strong>${money(r.target1,c)} → ${money(r.target2,c)}</strong></div></div>`).join('')||'<div class="muted">추천 없음</div>');
+  if(tab==='strategy'){
+    const day=a.lanes?.day_1pct?.items||[], swing=a.lanes?.swing?.items||[];
+    const laneHtml=`<div class="detail-card"><b>하루 +1% 목표 후보</b>${day.map(r=>`<div class="row"><span>${esc(r.name)} · ${esc(r.status)}</span><strong>${Number(r.score||0).toFixed(1)} / ${Number(r.required_score||0).toFixed(1)}</strong></div>`).join('')||'<div class="sub">대기 중</div>'}</div><div class="detail-card"><b>1–2주 Swing 후보</b>${swing.map(r=>`<div class="row"><span>${esc(r.name)} · ${esc(r.status)}</span><strong>${Number(r.score||0).toFixed(1)} / ${Number(r.required_score||0).toFixed(1)}</strong></div>`).join('')||'<div class="sub">대기 중</div>'}</div>`;
+    const formal=a.recs.map(r=>`<div class="detail-card"><b>${r.name} (${r.code})</b><div class="row"><span>현재 상태</span><strong>${r.live?.status||'장전'}</strong></div><div class="row"><span>1차 관심</span><strong>${money(r.entry_low_1,c)} ~ ${money(r.entry_high_1,c)}</strong></div><div class="row"><span>추격 금지</span><strong>${money(r.chase_limit,c)}</strong></div><div class="row"><span>손절/무효</span><strong>${money(r.stop_price,c)}</strong></div><div class="row"><span>목표</span><strong>${money(r.target1,c)} → ${money(r.target2,c)}</strong></div></div>`).join('')||'<div class="detail-card"><b>엄격 실행기준 통과 없음</b><div class="sub">WATCH 후보와 동일하지 않습니다.</div></div>';
+    return openSheet(`${currentMarket==='US'?'미국':'한국'} 듀얼 전략`,laneHtml+formal);
+  }
   if(tab==='reports'){if(currentMarket==='US')return showMacro(); const d=await api('/api/reports');return openSheet('증권사 리포트',(d.top||[]).map((x,i)=>`<div class="detail-card"><b>${i+1}. ${x.name} (${x.code})</b><div class="row"><span>리포트 / 증권사</span><strong>${x.count}건 / ${x.broker_count}곳</strong></div><div class="row"><span>신호</span><strong>${x.signal.toFixed(3)}</strong></div></div>`).join('')||'<div class="muted">오늘 리포트 없음</div>')}
   if(tab==='history'||tab==='learning'){if(currentMarket==='US')return openSheet('미국 모델 학습',`<div class="detail-card"><b>US 모델은 한국 모델과 완전히 분리 학습됩니다.</b><div class="row"><span>표본</span><strong>${a.learning.samples||0}</strong></div><div class="row"><span>승률</span><strong>${Number(a.learning.win_rate||0).toFixed(1)}%</strong></div></div>`);const d=await api('/api/history?days=20');return openSheet('추천 종목 사후평가',(d.items||[]).map(x=>`<div class="detail-card"><b>${x.trade_date} · ${x.name}</b><div class="row"><span>시가→종가</span><strong>${pct(x.open_to_close_pct)}</strong></div><div class="row"><span>MFE / MAE</span><strong>${pct(x.mfe_pct)} / ${pct(x.mae_pct)}</strong></div></div>`).join('')||'<div class="muted">평가 데이터 없음</div>')}
   if(tab==='settings')return openSettings(false);

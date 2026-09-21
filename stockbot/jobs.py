@@ -25,6 +25,7 @@ from .regime import infer_market_regime, attach_regime_features
 from .risk import allocate_weights
 from .research import ResearchManager
 from .scoring import five_day_return, risk_adjusted_score, score
+from .strategy_lanes import DualStrategyEngine
 
 log = logging.getLogger(__name__)
 
@@ -83,9 +84,22 @@ class TradingAssistant:
         self.research = ResearchManager(settings, self.db, self.analyst)
         self.predictor = PredictiveEnsemble(self.db, self.cfg, settings.path("storage.model_dir"))
         self._latest_reports: list[dict[str, Any]] = []
+        self.strategy_lanes = DualStrategyEngine(settings)
 
     def today(self) -> str:
         return datetime.now(ZoneInfo(self.settings.timezone)).date().isoformat()
+
+    def _deep_daily(self, candidate: Candidate, days: int) -> pd.DataFrame:
+        return self.kis.daily_chart(candidate.code, days)
+
+    def update_strategy_lanes(self, candidates: list[Candidate], daily_map: dict[str, pd.DataFrame], include_swing: bool = True) -> dict[str, Any]:
+        prev = self.db.get_state("strategy_lanes_latest", {}) or {}
+        out = self.strategy_lanes.build(
+            candidates, daily_map, "KR", deep_history_fetcher=self._deep_daily,
+            include_swing=include_swing, previous_swing=prev.get("swing"),
+        )
+        self.db.set_state("strategy_lanes_latest", out)
+        return out
 
     def _excluded(self, code: str, name: str) -> bool:
         mcfg = self.cfg.get("market", {})
@@ -324,6 +338,12 @@ class TradingAssistant:
         # clean supervised-learning samples. INSERT OR IGNORE prevents accidental
         # after-open reruns from contaminating the original morning snapshot.
         self.db.save_candidate_snapshots(trade_date, candidates)
+        # v8.0: always publish two independent horizons.  The lane cards show the
+        # strongest WATCH candidates even when strict execution recommendations abstain.
+        try:
+            self.update_strategy_lanes(candidates, daily_map, include_swing=True)
+        except Exception as exc:
+            log.warning("dual strategy lane refresh failed: %s", exc)
 
         n = int(self.settings.get("market.final_pick_count", 3))
         min_final = float(self.settings.get("prediction.minimum_final_score", 60.0))
@@ -446,7 +466,7 @@ class TradingAssistant:
         # a morning trade.
         replacement = self.find_replacement(recs) if scan_replacement else None
 
-        # 10-minute monitoring should not spam Telegram. Notify immediately when the
+        # 15-minute cloud monitoring sends a heartbeat every scheduled run and also notifies when the
         # state changes (entry/target/stop/chase/VWAP weakness) or on the periodic
         # summary cadence. The app dashboard still sees every saved snapshot.
         changed = False
@@ -489,6 +509,8 @@ class TradingAssistant:
             )
         weights = self.learner.current_weights()
         scan_rows: dict[str, dict[str, Any]] = {}
+        lane_candidates: list[Candidate] = []
+        lane_daily: dict[str, pd.DataFrame] = {}
         filtered = 0
         try:
             rows = self.kis.volume_rank("0000")[:12] + self.kis.fluctuation_rank("0000")[:12]
@@ -528,6 +550,12 @@ class TradingAssistant:
                 feats.update(self.macro.equity_features("KR"))
                 raw_sc = score(feats, weights)
                 final = risk_adjusted_score(raw_sc, change, five_day_return(daily), [])
+                lane_candidate = Candidate(
+                    code=code, name=name, price=float(q.get("price") or 0), change_pct=change,
+                    turnover_krw=float(q.get("turnover_krw") or 0), volume=float(q.get("volume") or 0),
+                    features=feats, raw_score=raw_sc, heuristic_score=final, final_score=final, risk_flags=[],
+                )
+                lane_candidates.append(lane_candidate); lane_daily[code] = daily
                 scan_rows[code] = {
                     "code": code, "name": name, "price": float(q.get("price") or 0),
                     "change_pct": change, "score": round(final, 2),
@@ -583,6 +611,10 @@ class TradingAssistant:
                         "accepted": accepted, "data_status": "ok",
                         "ts": datetime.now(ZoneInfo(self.settings.timezone)).isoformat(timespec="seconds"),
                     })
+                    try:
+                        self.update_strategy_lanes(lane_candidates, lane_daily, include_swing=False)
+                    except Exception as exc:
+                        log.warning("intraday strategy lane refresh failed: %s", exc)
                     return accepted
             except Exception as exc:
                 log.debug("replacement scan failed %s: %s", code, exc)
@@ -595,6 +627,10 @@ class TradingAssistant:
             "accepted": None, "data_status": "ok",
             "ts": datetime.now(ZoneInfo(self.settings.timezone)).isoformat(timespec="seconds"),
         })
+        try:
+            self.update_strategy_lanes(lane_candidates, lane_daily, include_swing=False)
+        except Exception as exc:
+            log.warning("intraday strategy lane refresh failed: %s", exc)
         return None
 
     def format_intraday(self, updates: list[dict[str, Any]], replacement: dict[str, Any] | None) -> str:
@@ -620,7 +656,31 @@ class TradingAssistant:
                 replacement.get("summary", ""),
             ]
         else:
-            lines.append("새 후보는 기존 추천보다 충분히 강하지 않아 교체하지 않습니다.")
+            scan = self.db.get_state("last_replacement_scan", {}) or {}
+            top = list(scan.get("top", []) or [])
+            if not updates:
+                lines.append("📭 현재 정식 추천 종목 없음 · 엄격 실행기준 통과 없음")
+                lanes = self.db.get_state("strategy_lanes_latest", {}) or {}
+                day_items = list(((lanes.get("day_1pct") or {}).get("items") or []))
+                swing_items = list(((lanes.get("swing") or {}).get("items") or []))
+                if day_items:
+                    x = day_items[0]
+                    lines.append(f"🎯 +1% 목표 1순위: {x.get('name', x.get('code'))} | {x.get('status')} | 준비도 {float(x.get('score',0)):.1f}")
+                if swing_items:
+                    x = swing_items[0]
+                    lines.append(f"📈 1–2주 1순위: {x.get('name', x.get('code'))} | {x.get('status')} | 스윙 {float(x.get('score',0)):.1f}")
+            if top:
+                best = top[0]
+                lines += [
+                    "신규 기준 통과 종목 없음",
+                    f"가장 가까운 후보: {best.get('name', best.get('code', '-'))} "
+                    f"score {float(best.get('score', 0) or 0):.1f} / 필요 {float(best.get('required_score', 0) or 0):.1f}",
+                ]
+            elif scan.get("data_status") == "api_error":
+                lines.append("⚠️ 후보 스캔 API 오류 — 이전 대시보드 상태 유지")
+            else:
+                lines.append("새 후보는 기준을 통과하지 못했습니다.")
+        lines.append("✅ 15분 모니터 정상 실행")
         return "\n".join(lines)
 
     def close(self) -> dict[str, Any]:

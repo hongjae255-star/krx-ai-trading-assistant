@@ -1,13 +1,11 @@
 name: KRX 15-minute monitor
 on:
   schedule:
-    - cron: '12,42 9-14 * * 1-5'
+    # 09:12, 09:27, 09:42, 09:57 ... 14:57 KST
+    - cron: '12/15 9-14 * * 1-5'
       timezone: 'Asia/Seoul'
-    - cron: '27,57 9-14 * * 1-5'
-      timezone: 'Asia/Seoul'
-    - cron: '12 15 * * 1-5'
-      timezone: 'Asia/Seoul'
-    - cron: '27 15 * * 1-5'
+    # 15:12, 15:27 KST
+    - cron: '12,27 15 * * 1-5'
       timezone: 'Asia/Seoul'
   workflow_dispatch:
     inputs:
@@ -24,7 +22,7 @@ permissions:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     env:
       FREE_MODE: 'true'
       KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
@@ -37,6 +35,12 @@ jobs:
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      # Intraday jobs should fail fast and use the saved stale snapshot rather than
+      # spend most of the 15-minute window retrying one unreachable KIS endpoint.
+      KIS_MAX_RETRIES: '2'
+      KIS_CONNECT_TIMEOUT: '6'
+      KIS_READ_TIMEOUT: '12'
+      KIS_NETWORK_COOLDOWN: '180'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -47,11 +51,23 @@ jobs:
       - name: Run monitor
         shell: bash
         run: |
-          S="${{ github.event.schedule }}"
           if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ inputs.full_scan }}" == "true" ]]; then
-            python -m stockbot.cloud_runner kr-intraday --full-scan
-          elif [[ "$S" == "12,42 9-14 * * 1-5" || "$S" == "12 15 * * 1-5" ]]; then
-            python -m stockbot.cloud_runner kr-intraday --full-scan
+            timeout 600s python -m stockbot.cloud_runner kr-intraday --full-scan
           else
-            python -m stockbot.cloud_runner kr-intraday
+            MINUTE="$(TZ=Asia/Seoul date +%M)"
+            if [[ "$MINUTE" == "12" || "$MINUTE" == "42" ]]; then
+              timeout 600s python -m stockbot.cloud_runner kr-intraday --full-scan
+            else
+              timeout 600s python -m stockbot.cloud_runner kr-intraday
+            fi
+          fi
+      - name: Telegram failure alert
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+            TEXT="🚨 KRX 15분 모니터 실패\nrun #${GITHUB_RUN_NUMBER}\n${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            curl -sS --max-time 15 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${TEXT}" >/dev/null || true
           fi

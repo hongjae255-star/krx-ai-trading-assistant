@@ -24,15 +24,15 @@ monitoring:
   # 아침 추천이 0개였을 때도 장중 신규 주도 후보는 이 점수 이상이어야 알립니다.
   new_leader_min_score: 68.0
   # Telegram은 상태 변화/목표·손절·진입 신호가 있을 때 즉시,
-  # 변화가 없어도 30분마다 요약을 보냅니다.
-  telegram_summary_interval_minutes: 30
+  # 변화가 없어도 15분마다 요약을 보냅니다.
+  telegram_summary_interval_minutes: 15
   app_refresh_seconds: 20
   web_host: "0.0.0.0"
   web_port: 8080
 
 market:
   # v3는 최종 추천 외에도 shadow 후보를 모두 저장/평가하여 학습 표본을 늘립니다.
-  candidate_pool_size: 24
+  candidate_pool_size: 32
   final_pick_count: 3
   min_price_krw: 5000
   min_turnover_krw: 10000000000
@@ -135,7 +135,7 @@ us_market:
   exclude_symbols: [SPY, QQQ, DIA, IWM, TLT, IEF, SHY, HYG, LQD, GLD, SLV, USO, UUP, VXX, UVXY, SQQQ, TQQQ, SOXL, SOXS]
   exclude_name_contains: [" ETF", "2X", "3X", "ULTRA", "BULL", "BEAR", "INVERSE"]
   market:
-    candidate_pool_size: 24
+    candidate_pool_size: 28
     final_pick_count: 3
     min_price_usd: 5
     min_turnover_usd: 50000000
@@ -149,7 +149,7 @@ us_market:
     active_end_et: "15:50"
     active_interval_minutes: 15
     replacement_interval_minutes: 30
-    telegram_summary_interval_minutes: 30
+    telegram_summary_interval_minutes: 15
     closing_et: "16:15"
   technical:
     atr_period: 14
@@ -285,3 +285,53 @@ market_dashboard:
   index_refresh_minutes: 30
   index_chart_days: 30
   rejected_candidate_count: 5
+
+
+# v8.0 dual-horizon decision engine. These are screening/plan targets, not guaranteed returns.
+strategy_lanes:
+  day_1pct:
+    enabled: true
+    picks: 3
+    # Net target after the estimated round-trip cost assumption.
+    net_target_pct: 1.00
+    estimated_round_trip_cost_bps: 25
+    minimum_atr_pct: 0.95
+    maximum_atr_pct: 6.00
+    maximum_current_gain_pct: 8.0
+    min_stop_pct: 0.55
+    max_stop_pct: 0.90
+    actionable_score_by_regime:
+      risk_on: 58.0
+      mixed: 61.0
+      risk_off: 65.0
+  swing:
+    enabled: true
+    picks: 3
+    history_days: 260
+    # Only the strongest pre-ranked names incur 200+ bar pagination.
+    deep_history_candidates: 10
+    deep_history_candidates_kr: 10
+    deep_history_candidates_us: 6
+    minimum_stage2_checks: 5
+    maximum_current_gain_pct: 12.0
+    min_stop_pct: 3.0
+    max_stop_pct: 7.0
+    actionable_score_by_regime:
+      risk_on: 64.0
+      mixed: 68.0
+      risk_off: 72.0
+
+# SEC Form 13F context for the 1-2 week US swing lane.
+# SEC_USER_AGENT must be supplied as a GitHub Secret in the form
+# "Your App/Name contact@example.com" to comply with SEC fair-access guidance.
+institutional_tracking:
+  enabled: true
+  cache_hours: 12
+  timeout_seconds: 12
+  request_delay_seconds: 0.15
+  managers:
+    - {name: Berkshire Hathaway, cik: "0001067983"}
+    - {name: Bridgewater Associates, cik: "0001350694"}
+    - {name: ARK Investment Management, cik: "0001697748"}
+    - {name: Pershing Square, cik: "0001336528"}
+    - {name: Baupost Group, cik: "0001061768"}

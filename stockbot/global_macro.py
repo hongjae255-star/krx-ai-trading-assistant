@@ -91,7 +91,7 @@ class FREDClient:
         session = getattr(self._thread_local, "session", None)
         if session is None:
             session = requests.Session()
-            session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/7.8"})
+            session.headers.update({"User-Agent": "KRX-AI-Trading-Assistant/8.0"})
             adapter = requests.adapters.HTTPAdapter(pool_connections=2, pool_maxsize=4, max_retries=0)
             session.mount("https://", adapter)
             self._thread_local.session = session
@@ -125,6 +125,48 @@ class FREDClient:
         assert last_exc is not None
         raise last_exc
 
+    def _probe_once(self, url: str, *, params: dict[str, Any]) -> requests.Response:
+        """Single short health probe used before fanning out 19 FRED requests."""
+        r = self._session().get(
+            url,
+            params=params,
+            timeout=(min(self.connect_timeout, 4.0), min(self.timeout, 6.0)),
+        )
+        r.raise_for_status()
+        return r
+
+    def probe(self) -> dict[str, Any]:
+        """Pick one healthy transport quickly and avoid a 19-series timeout storm."""
+        start = (datetime.now(timezone.utc).date() - timedelta(days=14)).isoformat()
+        api_error = ""
+        if self.api_key:
+            try:
+                self._probe_once(
+                    "https://api.stlouisfed.org/fred/series/observations",
+                    params={
+                        "series_id": "DFF", "api_key": self.api_key, "file_type": "json",
+                        "observation_start": start, "sort_order": "desc", "limit": 1,
+                    },
+                )
+                return {"status": "ok", "transport": "api", "api_error": ""}
+            except Exception as exc:
+                api_error = str(exc)[:240]
+        try:
+            self._probe_once(
+                "https://fred.stlouisfed.org/graph/fredgraph.csv",
+                params={"id": "DFF", "cosd": start},
+            )
+            return {
+                "status": "fallback" if self.api_key else "ok",
+                "transport": "graph",
+                "api_error": api_error,
+            }
+        except Exception as exc:
+            return {
+                "status": "down", "transport": "down",
+                "api_error": api_error, "graph_error": str(exc)[:240],
+            }
+
     def _official_api_series(self, series_id: str, start: str, as_of: str | None) -> pd.DataFrame:
         params: dict[str, Any] = {
             "series_id": series_id,
@@ -157,20 +199,23 @@ class FREDClient:
         value_col = raw.columns[-1]
         return raw.rename(columns={date_col: "date", value_col: "value"})[["date", "value"]]
 
-    def series(self, series_id: str, days: int = 120, as_of: str | None = None) -> pd.DataFrame:
+    def series(
+        self, series_id: str, days: int = 120, as_of: str | None = None,
+        transport: str | None = None,
+    ) -> pd.DataFrame:
         start = (datetime.now(timezone.utc).date() - timedelta(days=max(days * 2, 180))).isoformat()
-        if self.api_key:
-            try:
-                df = self._official_api_series(series_id, start, as_of)
-            except Exception:
-                # For current snapshots only, fall back to public graph CSV if the
-                # official API is temporarily unavailable. Historical as-of queries
-                # must never fall back because that would lose vintage safety.
-                if as_of is not None:
-                    raise
-                df = self._graph_csv_series(series_id, start)
-        else:
+        mode = transport or ("api" if self.api_key else "graph")
+        if as_of is not None:
+            # Vintage-safe historical retrieval must use the official API only.
+            if not self.api_key:
+                raise RuntimeError("FRED_API_KEY required for vintage-safe as_of retrieval")
+            mode = "api"
+        if mode == "api":
+            df = self._official_api_series(series_id, start, as_of)
+        elif mode == "graph":
             df = self._graph_csv_series(series_id, start)
+        else:
+            raise RuntimeError(f"FRED transport unavailable: {mode}")
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
         return df.dropna(subset=["value"]).tail(days).reset_index(drop=True)
 
@@ -227,6 +272,33 @@ class GlobalMacroEngine:
         previous = self.db.get_state(self.STATE_KEY, {}) if as_of is None else {}
         previous_series = previous.get("series", {}) if isinstance(previous, dict) else {}
 
+        # Serverless runners start from a fresh Python process every time, so an
+        # in-memory cache alone is ineffective. Reuse the persisted Supabase/SQLite
+        # snapshot when it is still inside the configured cache window.
+        if not force and as_of is None and isinstance(previous, dict) and previous.get("timestamp"):
+            try:
+                ts = datetime.fromisoformat(str(previous["timestamp"]).replace("Z", "+00:00"))
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                age = (datetime.now(timezone.utc) - ts.astimezone(timezone.utc)).total_seconds()
+                if 0 <= age < self.cache_seconds:
+                    cached = dict(previous)
+                    cached["cache_hit"] = "persistent"
+                    self._cached, self._cached_at = cached, now
+                    return cached
+            except Exception:
+                pass
+
+        probe = {"status": "historical", "transport": "api" if self.fred.api_mode else "down"}
+        if as_of is None:
+            # Compatibility with test doubles / third-party FRED readers that predate
+            # v7.9's preflight method. Real v7.9 FREDClient always has probe().
+            if hasattr(self.fred, "probe"):
+                probe = self.fred.probe()
+            else:
+                probe = {"status": "legacy", "transport": "api" if self.fred.api_mode else "graph"}
+        transport = str(probe.get("transport") or "down")
+
         # The unauthenticated graph endpoint is substantially more fragile under
         # GitHub-hosted runners than the official API. Keep its concurrency low.
         # A valid FRED key uses the official API with moderate parallelism.
@@ -235,31 +307,48 @@ class GlobalMacroEngine:
             4 if self.fred.api_mode else 2,
         ))
         workers = max(1, min(requested_workers, len(self.series_map)))
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="fred") as pool:
-            futures = {
-                pool.submit(self.fred.series, str(sid), 120, as_of): (name, sid)
-                for name, sid in self.series_map.items()
-            }
-            for fut in as_completed(futures):
-                name, sid = futures[fut]
-                try:
-                    rows[name] = self._stats(fut.result())
-                except Exception as exc:
-                    # A transport failure is not the same thing as a hard data failure.
-                    # If a previous successful snapshot exists, preserve it and mark it
-                    # stale instead of showing a zero or counting it twice as failed.
-                    log.warning("macro series transport failed %s/%s: %s", name, sid, exc)
-                    transport_failures.append(name)
-                    old_stats = previous_series.get(name) if isinstance(previous_series, dict) else None
-                    if isinstance(old_stats, dict) and old_stats and float(old_stats.get("value", 0) or 0) != 0:
-                        rows[name] = dict(old_stats)
-                        stale_series.append(name)
-                    else:
-                        hard_failures.append(name)
-                        rows[name] = {
-                            "value": 0.0, "chg_1": 0.0, "chg_5": 0.0,
-                            "pct_1": 0.0, "pct_5": 0.0, "z60": 0.0,
-                        }
+        if transport == "down":
+            # Both official API and public graph endpoint failed the short probe.
+            # Do not launch 19 long-running retries; preserve the previous snapshot.
+            log.warning("FRED preflight failed; reusing previous macro snapshot. probe=%s", probe)
+            for name in self.series_map:
+                transport_failures.append(name)
+                old_stats = previous_series.get(name) if isinstance(previous_series, dict) else None
+                if isinstance(old_stats, dict) and old_stats and float(old_stats.get("value", 0) or 0) != 0:
+                    rows[name] = dict(old_stats)
+                    stale_series.append(name)
+                else:
+                    hard_failures.append(name)
+                    rows[name] = {
+                        "value": 0.0, "chg_1": 0.0, "chg_5": 0.0,
+                        "pct_1": 0.0, "pct_5": 0.0, "z60": 0.0,
+                    }
+        else:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="fred") as pool:
+                futures = {
+                    pool.submit(self.fred.series, str(sid), 120, as_of, transport): (name, sid)
+                    for name, sid in self.series_map.items()
+                }
+                for fut in as_completed(futures):
+                    name, sid = futures[fut]
+                    try:
+                        rows[name] = self._stats(fut.result())
+                    except Exception as exc:
+                        # A transport failure is not the same thing as a hard data failure.
+                        # If a previous successful snapshot exists, preserve it and mark it
+                        # stale instead of showing a zero or counting it twice as failed.
+                        log.warning("macro series transport failed %s/%s: %s", name, sid, exc)
+                        transport_failures.append(name)
+                        old_stats = previous_series.get(name) if isinstance(previous_series, dict) else None
+                        if isinstance(old_stats, dict) and old_stats and float(old_stats.get("value", 0) or 0) != 0:
+                            rows[name] = dict(old_stats)
+                            stale_series.append(name)
+                        else:
+                            hard_failures.append(name)
+                            rows[name] = {
+                                "value": 0.0, "chg_1": 0.0, "chg_5": 0.0,
+                                "pct_1": 0.0, "pct_5": 0.0, "z60": 0.0,
+                            }
 
         def v(name: str, field: str = "value") -> float:
             return float(rows.get(name, {}).get(field, 0.0) or 0.0)
@@ -318,8 +407,11 @@ class GlobalMacroEngine:
         }
         snapshot = {
             "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "source": "FRED_API" if self.fred.api_mode else "FRED_GRAPH_CSV",
+            "source": ("FRED_API" if transport == "api" else "FRED_GRAPH_CSV" if transport == "graph" else "FRED_PREVIOUS_SNAPSHOT"),
             "api_key_status": self.fred.api_key_status,
+            "endpoint_status": probe.get("status", "unknown"),
+            "endpoint_transport": transport,
+            "endpoint_probe": {k: v for k, v in probe.items() if k not in {"transport", "status"} and v},
             "vintage_safe": bool(self.fred.api_mode and as_of),
             "as_of": as_of,
             # Backward-compatible `failures` now means true hard failures only.

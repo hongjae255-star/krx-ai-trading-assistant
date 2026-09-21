@@ -307,22 +307,50 @@ class KISClient:
         return list(data or [])
 
     def daily_chart(self, code: str, days: int = 45) -> pd.DataFrame:
-        end = datetime.now().strftime("%Y%m%d")
-        start = (datetime.now() - timedelta(days=max(90, days * 2))).strftime("%Y%m%d")
-        body = self._get(
-            "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
-            "FHKST03010100",
-            {
-                "FID_COND_MRKT_DIV_CODE": "J",
-                "FID_INPUT_ISCD": code,
-                "FID_INPUT_DATE_1": start,
-                "FID_INPUT_DATE_2": end,
-                "FID_PERIOD_DIV_CODE": "D",
-                "FID_ORG_ADJ_PRC": "0",
-            },
-        )
-        rows = body.get("output2", []) or []
-        df = pd.DataFrame(rows)
+        """Domestic adjusted daily bars with pagination for long-horizon screens.
+
+        KIS documents the period endpoint as returning at most 100 rows per query.
+        v8.0 walks the end date backward so the swing engine can evaluate 50/150/200
+        day averages and the 52-week range without changing data vendors.
+        """
+        days = max(1, int(days))
+        end_dt = datetime.now()
+        start_dt = end_dt - timedelta(days=max(120, int(days * 2.2)))
+        current_end = end_dt
+        rows_all: list[dict[str, Any]] = []
+        max_pages = max(1, min(6, (days + 79) // 80 + 1))
+        for _ in range(max_pages):
+            body = self._get(
+                "/uapi/domestic-stock/v1/quotations/inquire-daily-itemchartprice",
+                "FHKST03010100",
+                {
+                    "FID_COND_MRKT_DIV_CODE": "J",
+                    "FID_INPUT_ISCD": code,
+                    "FID_INPUT_DATE_1": start_dt.strftime("%Y%m%d"),
+                    "FID_INPUT_DATE_2": current_end.strftime("%Y%m%d"),
+                    "FID_PERIOD_DIV_CODE": "D",
+                    "FID_ORG_ADJ_PRC": "0",
+                },
+            )
+            rows = [x for x in (body.get("output2", []) or []) if isinstance(x, dict)]
+            if not rows:
+                break
+            rows_all.extend(rows)
+            dates = [str(x.get("stck_bsop_date", "")) for x in rows if str(x.get("stck_bsop_date", "")).isdigit()]
+            if not dates:
+                break
+            oldest = min(dates)
+            if len({str(x.get("stck_bsop_date", "")) for x in rows_all}) >= days:
+                break
+            try:
+                next_end = datetime.strptime(oldest, "%Y%m%d") - timedelta(days=1)
+            except ValueError:
+                break
+            if next_end <= start_dt or next_end >= current_end:
+                break
+            current_end = next_end
+
+        df = pd.DataFrame(rows_all)
         if df.empty:
             return df
         rename = {
@@ -334,7 +362,7 @@ class KISClient:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
         if "date" in df.columns:
-            df = df.sort_values("date").tail(days).reset_index(drop=True)
+            df = df.drop_duplicates(subset=["date"], keep="first").sort_values("date").tail(days).reset_index(drop=True)
         return df
 
     def domestic_index_daily(self, index_code: str, days: int = 30) -> pd.DataFrame:
@@ -531,13 +559,41 @@ class KISClient:
         return out
 
     def overseas_daily_chart(self, symbol: str, exchange: str = "NAS", days: int = 45) -> pd.DataFrame:
-        body = self._get(
-            "/uapi/overseas-price/v1/quotations/dailyprice",
-            "HHDFS76240000",
-            {"AUTH": "", "EXCD": exchange, "SYMB": symbol, "GUBN": "0", "BYMD": "", "MODP": "1"},
-        )
-        rows = body.get("output2", []) or []
-        df = pd.DataFrame(rows)
+        """Overseas daily bars with conservative BYMD pagination.
+
+        The normal 45-day scanner still completes in one request.  The 1-2 week
+        swing lane asks for ~260 bars only for a small deep-history shortlist.
+        """
+        days = max(1, int(days))
+        bymd = ""
+        rows_all: list[dict[str, Any]] = []
+        max_pages = 1 if days <= 80 else max(2, min(6, (days + 79) // 80 + 1))
+        for _ in range(max_pages):
+            body = self._get(
+                "/uapi/overseas-price/v1/quotations/dailyprice",
+                "HHDFS76240000",
+                {"AUTH": "", "EXCD": exchange, "SYMB": symbol, "GUBN": "0", "BYMD": bymd, "MODP": "1"},
+            )
+            rows = [x for x in (body.get("output2", []) or []) if isinstance(x, dict)]
+            if not rows:
+                break
+            rows_all.extend(rows)
+            dates = [str(x.get("xymd", "")) for x in rows if str(x.get("xymd", "")).isdigit()]
+            if not dates:
+                break
+            if len({str(x.get("xymd", "")) for x in rows_all}) >= days:
+                break
+            oldest = min(dates)
+            try:
+                next_day = datetime.strptime(oldest, "%Y%m%d") - timedelta(days=1)
+                next_bymd = next_day.strftime("%Y%m%d")
+            except ValueError:
+                break
+            if next_bymd == bymd:
+                break
+            bymd = next_bymd
+
+        df = pd.DataFrame(rows_all)
         if df.empty:
             return df
         rename = {"xymd": "date", "open": "open", "high": "high", "low": "low", "clos": "close", "tvol": "volume", "tamt": "turnover"}
@@ -546,7 +602,7 @@ class KISClient:
             if c in df.columns:
                 df[c] = pd.to_numeric(df[c], errors="coerce")
         if "date" in df.columns:
-            df = df.sort_values("date").tail(days).reset_index(drop=True)
+            df = df.drop_duplicates(subset=["date"], keep="first").sort_values("date").tail(days).reset_index(drop=True)
         return df
 
     def overseas_intraday_chart(

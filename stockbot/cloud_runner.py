@@ -54,14 +54,15 @@ def run_cloud_job(job: str, full_scan: bool = False) -> dict:
     try:
         if job == "research": result = bot.research_only()
         elif job == "kr-premarket": result = [x.__dict__ for x in bot.premarket()]
-        elif job == "kr-intraday": result = bot.intraday(scan_replacement=full_scan, force_summary=full_scan)
+        elif job == "kr-intraday": result = bot.intraday(scan_replacement=full_scan, force_summary=True)
         elif job == "kr-close": result = bot.close()
         elif job == "us-premarket": result = [x.__dict__ for x in us.premarket()]
-        elif job == "us-intraday": result = us.intraday(force_summary=full_scan, scan_replacement=full_scan)
+        elif job == "us-intraday": result = us.intraday(force_summary=True, scan_replacement=full_scan)
         elif job == "us-close": result = us.close()
         elif job == "macro": result = bot.macro.snapshot(force=True)
+        elif job == "institutional": result = us.institutional.refresh(force=True)
         elif job == "refresh-kr":
-            macro = bot.macro.snapshot(force=True)
+            macro = bot.macro.snapshot(force=False)
             live = bot.macro.live_snapshot(force=True)
             pulse = MarketPulseService(settings, bot.kis, bot.db).snapshot(force=True)
             market = bot.intraday(scan_replacement=True, force_summary=True)
@@ -78,9 +79,10 @@ def run_cloud_job(job: str, full_scan: bool = False) -> dict:
                 "intraday": market,
             }
         elif job == "refresh-us":
-            macro = bot.macro.snapshot(force=True)
+            macro = bot.macro.snapshot(force=False)
             live = bot.macro.live_snapshot(force=True)
             pulse = MarketPulseService(settings, bot.kis, bot.db).snapshot(force=True)
+            institutional = us.institutional.refresh(force=False)
             market = us.intraday(force_summary=True, scan_replacement=True)
             result = {
                 "market": "US",
@@ -92,6 +94,7 @@ def run_cloud_job(job: str, full_scan: bool = False) -> dict:
                 },
                 "live_proxy_failures": len(live.get("failures", [])),
                 "index_failures": len(pulse.get("failures", [])),
+                "institutional_status": institutional.get("status"),
                 "intraday": market,
             }
         elif job == "publish": result = {"published_only": True}
@@ -107,7 +110,7 @@ def run_cloud_job(job: str, full_scan: bool = False) -> dict:
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("job", choices=["research","kr-premarket","kr-intraday","kr-close","us-premarket","us-intraday","us-close","macro","refresh-kr","refresh-us","publish"])
+    p.add_argument("job", choices=["research","kr-premarket","kr-intraday","kr-close","us-premarket","us-intraday","us-close","macro","institutional","refresh-kr","refresh-us","publish"])
     p.add_argument("--full-scan", action="store_true")
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(name)s | %(message)s")

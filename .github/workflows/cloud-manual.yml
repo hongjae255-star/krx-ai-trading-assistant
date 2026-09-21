@@ -7,7 +7,7 @@ on:
         required: true
         default: publish
         type: choice
-        options: [publish, macro, refresh-kr, refresh-us, research, kr-premarket, kr-intraday, kr-close, us-premarket, us-intraday, us-close]
+        options: [publish, macro, institutional, refresh-kr, refresh-us, research, kr-premarket, kr-intraday, kr-close, us-premarket, us-intraday, us-close]
       full_scan:
         description: Full market rescan for intraday jobs
         required: false
@@ -32,8 +32,13 @@ jobs:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      KIS_MAX_RETRIES: '2'
+      KIS_CONNECT_TIMEOUT: '6'
+      KIS_READ_TIMEOUT: '12'
+      KIS_NETWORK_COOLDOWN: '180'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -43,7 +48,18 @@ jobs:
       - run: pip install -r requirements.txt
       - run: |
           if [[ "${{ inputs.full_scan }}" == "true" && ("${{ inputs.job }}" == "kr-intraday" || "${{ inputs.job }}" == "us-intraday") ]]; then
-            python -m stockbot.cloud_runner "${{ inputs.job }}" --full-scan
+            timeout 660s python -m stockbot.cloud_runner "${{ inputs.job }}" --full-scan
           else
-            python -m stockbot.cloud_runner "${{ inputs.job }}"
+            timeout 660s python -m stockbot.cloud_runner "${{ inputs.job }}"
+          fi
+
+      - name: Telegram failure alert
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+            TEXT="🚨 Cloud manual 작업 실패\nrun #${GITHUB_RUN_NUMBER}\n${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            curl -sS --max-time 15 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${TEXT}" >/dev/null || true
           fi

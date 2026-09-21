@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0b1730" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Global AI" />
+  <link rel="apple-touch-icon" href="./assets/icon-192.png" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="stylesheet" href="./styles.css" />
+  <title>Global AI Trading Assistant</title>
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">GLOBAL AI TRADING ASSISTANT</div>
+        <h1>시장 모니터링</h1>
+      </div>
+      <div class="top-actions">
+        <button id="manualRefreshBtn" class="refresh-btn" type="button" aria-label="지금 데이터 갱신" title="지금 데이터 갱신">↻</button>
+        <div class="live-pill"><span class="dot"></span><span id="liveText">연결 중</span></div>
+      </div>
+    </header>
+
+    <main>
+      <section class="market-switch card">
+        <button id="krTab" class="market-btn active">🇰🇷 한국</button>
+        <button id="usTab" class="market-btn">🇺🇸 미국</button>
+      </section>
+
+      <section class="hero card">
+        <div>
+          <div class="muted">현재 모드</div>
+          <div class="hero-title">FREE · Local ML</div>
+          <div id="serverTime" class="sub">서버 시간 확인 중</div>
+        </div>
+        <div class="hero-stat">
+          <span id="interval">10</span><small>분</small>
+          <div class="muted">추천종목 모니터링</div>
+        </div>
+      </section>
+
+      <section id="positionWarning" class="warning card hidden"></section>
+
+      <section class="section-head"><h2>글로벌 매크로</h2><button class="text-btn" id="macroMore">상세</button></section>
+      <div id="macroCard" class="card macro-card"><div class="muted">금리·환율·변동성 데이터 대기 중</div></div>
+
+      <section class="section-head"><h2>시장 Pulse</h2><span id="healthBadge" class="health-badge">확인 중</span></section>
+      <div id="marketRegime" class="card pulse-summary"><div class="muted">지수 데이터 대기 중</div></div>
+      <div id="indexCharts" class="chart-grid"></div>
+      <div id="dataHealth" class="health-strip"></div>
+
+      <section id="leaderAlert" class="leader card hidden"></section>
+
+      <section class="section-head"><h2>듀얼 전략 후보</h2><span class="muted">항상 Top 3 표시</span></section>
+      <div class="strategy-note card"><b>수익 목표 ≠ 보장 수익</b><span>당일 전략은 거래비용까지 감안해 순 +1%를 목표로 설계하고, 1–2주 전략은 5–10거래일의 추세·모멘텀·수급·시장환경을 평가합니다. 기준 미달은 WATCH로 표시합니다.</span></div>
+      <div class="lane-grid">
+        <section class="lane-panel">
+          <div class="lane-head"><div><span class="lane-kicker">INTRADAY</span><h3>하루 +1% 목표</h3></div><span id="dayLaneCount" class="lane-count">대기</span></div>
+          <div id="dayLane" class="lane-stack"><div class="card lane-empty muted">후보 생성 대기 중</div></div>
+        </section>
+        <section class="lane-panel">
+          <div class="lane-head"><div><span class="lane-kicker">SWING</span><h3>1–2주 상승 후보</h3></div><span id="swingLaneCount" class="lane-count">대기</span></div>
+          <div id="swingLane" class="lane-stack"><div class="card lane-empty muted">후보 생성 대기 중</div></div>
+        </section>
+      </div>
+
+      <section id="institutionalSection" class="hidden">
+        <section class="section-head"><h2>유명 투자회사 13F</h2><span id="institutionalStatus" class="muted"></span></section>
+        <div id="institutional13f" class="card institutional-card"><div class="muted">SEC 13F 데이터 대기 중</div></div>
+      </section>
+
+      <section class="section-head"><h2>엄격 실행 전략</h2><span id="lastUpdate" class="muted"></span></section>
+      <div id="recommendations" class="stack"><div class="skeleton card"></div></div>
+
+      <section class="section-head"><h2>추천 보류 분석</h2><span id="scanSummary" class="muted"></span></section>
+      <div id="candidateDiagnostics" class="card diagnostics-card"><div class="muted">후보 스캔 기록 대기 중</div></div>
+
+      <section class="grid2">
+        <article class="card metric-card">
+          <div class="muted">오늘 증권사 리포트</div>
+          <strong id="reportCount">-</strong>
+          <div id="brokerCount" class="sub">-</div>
+        </article>
+        <article class="card metric-card">
+          <div class="muted">최근 추천 승률</div>
+          <strong id="winRate">-</strong>
+          <div id="avgReturn" class="sub">-</div>
+        </article>
+      </section>
+
+      <section class="section-head"><h2>리포트 컨센서스</h2><button class="text-btn" data-tab="reports">전체</button></section>
+      <div id="reportTop" class="card list-card"></div>
+
+      <section class="section-head"><h2>장마감 학습</h2><button class="text-btn" data-tab="learning">상세</button></section>
+      <div id="learningCard" class="card"></div>
+    </main>
+
+    <nav class="bottom-nav">
+      <button class="nav-item active" data-tab="home"><span>⌂</span><b>홈</b></button>
+      <button class="nav-item" data-tab="strategy"><span>◎</span><b>전략</b></button>
+      <button class="nav-item" data-tab="reports"><span>▤</span><b>리포트</b></button>
+      <button class="nav-item" data-tab="history"><span>↗</span><b>평가</b></button>
+      <button class="nav-item" data-tab="settings"><span>⚙</span><b>설정</b></button>
+    </nav>
+  </div>
+
+  <div id="sheet" class="sheet hidden">
+    <div class="sheet-panel">
+      <div class="sheet-handle"></div>
+      <div class="sheet-head"><h2 id="sheetTitle">상세</h2><button id="sheetClose">✕</button></div>
+      <div id="sheetContent"></div>
+    </div>
+  </div>
+
+  <script src="./runtime-config.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

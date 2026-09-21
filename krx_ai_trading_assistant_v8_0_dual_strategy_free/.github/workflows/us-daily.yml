@@ -1,0 +1,71 @@
+name: US daily jobs
+on:
+  schedule:
+    - cron: '17 9 * * 1-5'
+      timezone: 'America/New_York'
+    - cron: '17 16 * * 1-5'
+      timezone: 'America/New_York'
+  workflow_dispatch:
+    inputs:
+      job:
+        description: Job to run
+        required: true
+        default: us-premarket
+        type: choice
+        options: [us-premarket, us-close]
+concurrency:
+  group: krx-ai-cloud-state
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      FREE_MODE: 'true'
+      KIS_APP_KEY: ${{ secrets.KIS_APP_KEY }}
+      EXISTING_POSITIONS_JSON: ${{ secrets.EXISTING_POSITIONS_JSON }}
+      DAY_TRADE_CAPITAL_KRW: ${{ secrets.DAY_TRADE_CAPITAL_KRW }}
+      KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
+      DART_API_KEY: ${{ secrets.DART_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
+      SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+      KIS_MAX_RETRIES: '2'
+      KIS_CONNECT_TIMEOUT: '6'
+      KIS_READ_TIMEOUT: '12'
+      KIS_NETWORK_COOLDOWN: '180'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Select scheduled job
+        id: choose
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "job=${{ inputs.job }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.event.schedule }}" == "17 9 * * 1-5" ]]; then
+            echo "job=us-premarket" >> "$GITHUB_OUTPUT"
+          else
+            echo "job=us-close" >> "$GITHUB_OUTPUT"
+          fi
+      - run: timeout 660s python -m stockbot.cloud_runner "${{ steps.choose.outputs.job }}"
+
+      - name: Telegram failure alert
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
+            TEXT="🚨 US daily 작업 실패\nrun #${GITHUB_RUN_NUMBER}\n${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            curl -sS --max-time 15 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              --data-urlencode "chat_id=${TELEGRAM_CHAT_ID}" \
+              --data-urlencode "text=${TEXT}" >/dev/null || true
+          fi

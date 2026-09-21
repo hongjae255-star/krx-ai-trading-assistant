@@ -1,0 +1,27 @@
+name: Deploy manual refresh Edge Function
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_PROJECT_ID: ${{ secrets.SUPABASE_PROJECT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Validate deployment secrets
+        shell: bash
+        run: |
+          test -n "${SUPABASE_ACCESS_TOKEN:-}" || { echo "SUPABASE_ACCESS_TOKEN secret is missing"; exit 1; }
+          test -n "${SUPABASE_PROJECT_ID:-}" || { echo "SUPABASE_PROJECT_ID secret is missing"; exit 1; }
+      - name: Deploy function
+        run: supabase functions deploy manual-refresh --project-ref "$SUPABASE_PROJECT_ID"

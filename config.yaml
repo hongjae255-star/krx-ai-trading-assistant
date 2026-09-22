@@ -1,44 +1,44 @@
-﻿timezone: Asia/Seoul
+timezone: Asia/Seoul
 
-# v4 FREE: ?좊즺 LLM/API瑜??ъ슜?섏? ?딆뒿?덈떎.
+# v4 FREE: 유료 LLM/API를 사용하지 않습니다.
 free_mode: true
 
 scheduler:
   research: "07:45"
   premarket: "08:30"
-  # v5: 異붿쿇 醫낅ぉ? 10遺?媛꾧꺽?쇰줈 紐⑤땲?곕쭅?⑸땲??
-  # ?꾨옒 intraday_times???댁쟾 踰꾩쟾 ?명솚??fallback?낅땲??
+  # v5: 추천 종목은 10분 간격으로 모니터링합니다.
+  # 아래 intraday_times는 이전 버전 호환용 fallback입니다.
   intraday_times: []
   closing: "15:45"
 
 
 monitoring:
-  # 異붿쿇 醫낅ぉ ?꾩옱媛/VWAP/紐⑺몴媛 ?곹깭瑜?10遺꾨쭏???뺤씤?⑸땲??
+  # 추천 종목 현재가/VWAP/목표가 상태를 10분마다 확인합니다.
   active_interval_minutes: 15
   active_start: "09:10"
   active_end: "15:20"
-  # ?쒖옣 ?꾩껜 援먯껜 ?꾨낫 ?ㅼ틪? KIS ?몄텧?됱쓣 以꾩씠湲??꾪빐 30遺꾨쭏?ㅻ쭔 ?섑뻾?⑸땲??
+  # 시장 전체 교체 후보 스캔은 KIS 호출량을 줄이기 위해 30분마다만 수행합니다.
   replacement_interval_minutes: 30
-  # 湲곗〈 異붿쿇???덉쓣 ?뚮뒗 理쒗븯??異붿쿇蹂대떎 ???먯닔留뚰겮 媛뺥빐??援먯껜 ?꾨낫濡??뚮┰?덈떎.
+  # 기존 추천이 있을 때는 최하위 추천보다 이 점수만큼 강해야 교체 후보로 알립니다.
   replacement_score_margin: 8.0
-  # ?꾩묠 異붿쿇??0媛쒖????뚮룄 ?μ쨷 ?좉퇋 二쇰룄 ?꾨낫?????먯닔 ?댁긽?댁뼱???뚮┰?덈떎.
+  # 아침 추천이 0개였을 때도 장중 신규 주도 후보는 이 점수 이상이어야 알립니다.
   new_leader_min_score: 68.0
-  # Telegram? ?곹깭 蹂??紐⑺몴쨌?먯젅쨌吏꾩엯 ?좏샇媛 ?덉쓣 ??利됱떆,
-  # 蹂?붽? ?놁뼱??15遺꾨쭏???붿빟??蹂대깄?덈떎.
+  # Telegram은 상태 변화/목표·손절·진입 신호가 있을 때 즉시,
+  # 변화가 없어도 15분마다 요약을 보냅니다.
   telegram_summary_interval_minutes: 15
   app_refresh_seconds: 20
   web_host: "0.0.0.0"
   web_port: 8080
 
 market:
-  # v3??理쒖쥌 異붿쿇 ?몄뿉??shadow ?꾨낫瑜?紐⑤몢 ????됯??섏뿬 ?숈뒿 ?쒕낯???섎┰?덈떎.
+  # v3는 최종 추천 외에도 shadow 후보를 모두 저장/평가하여 학습 표본을 늘립니다.
   candidate_pool_size: 32
   final_pick_count: 3
   min_price_krw: 5000
   min_turnover_krw: 10000000000
   max_one_day_gain_pct: 15.0
   max_five_day_gain_pct: 30.0
-  exclude_name_contains: ["?ㅽ뙥", "SPAC", "ETN", "ETF"]
+  exclude_name_contains: ["스팩", "SPAC", "ETN", "ETF"]
   exclude_codes: []
 
 technical:
@@ -52,7 +52,7 @@ technical:
   vwap_confirmation_tolerance_pct: 0.35
 
 risk:
-  # ?⑦????좉퇋 ?먭툑. 蹂몄씤 ?곹솴??留욊쾶 ?섏젙?섏꽭??
+  # 단타용 신규 자금. 본인 상황에 맞게 수정하세요.
   day_trade_capital_krw: 5000000
   max_total_deployed_pct: 60
   max_single_stock_pct: 25
@@ -64,8 +64,8 @@ risk:
 
 existing_positions: []
 
-# ?댁꽍 媛?ν븳 baseline 紐⑤뜽. v3 ML? ???먯닔瑜??낅젰/?議곌뎔?쇰줈 ?ъ슜?섍퀬,
-# walk-forward OOF?먯꽌 ?ㅼ젣濡?媛쒖꽑???뚮쭔 理쒕? 65%源뚯? ?쇳빀?⑸땲??
+# 해석 가능한 baseline 모델. v3 ML은 이 점수를 입력/대조군으로 사용하고,
+# walk-forward OOF에서 실제로 개선될 때만 최대 65%까지 혼합됩니다.
 base_weights:
   liquidity: 0.15
   turnover_acceleration: 0.09
@@ -208,13 +208,13 @@ prediction:
   min_training_dates: 20
   walk_forward_splits: 5
   walk_forward_min_train_dates: 8
-  # test 吏곸쟾 1媛?嫄곕옒?쇱쓣 train?먯꽌 ?쒖쇅???몄젒湲곌컙 ?꾩닔/?섏〈?깆쓣 以꾩엯?덈떎.
+  # test 직전 1개 거래일을 train에서 제외해 인접기간 누수/의존성을 줄입니다.
   embargo_dates: 1
-  # 理쒓렐 ?곗씠?곗뿉 ???믪? 媛以묒튂瑜?二쇱뼱 ?쒖옣 蹂?붿뿉 ?곸쓳?⑸땲??
+  # 최근 데이터에 더 높은 가중치를 주어 시장 변화에 적응합니다.
   recency_half_life_days: 45
-  # ?뺣났 ?섏닔猷??щ━?쇱???蹂댁닔??湲곕낯 媛?? 蹂몄씤 ?ㅼ젣 鍮꾩슜??留욎떠 ?섏젙?섏꽭??
+  # 왕복 수수료+슬리피지의 보수적 기본 가정. 본인 실제 비용에 맞춰 수정하세요.
   estimated_round_trip_cost_bps: 25
-  # 鍮꾩슜 李④컧 ?????섏씡瑜좊낫???믪쑝硫??곸듅(label=1)濡??숈뒿?⑸땲??
+  # 비용 차감 후 이 수익률보다 높으면 상승(label=1)로 학습합니다.
   label_threshold_pct: 0.30
   isotonic_min_samples: 1000
   calibration_bins: 5
@@ -238,7 +238,7 @@ prediction:
   lower_bound_penalty_per_pct: 4.0
   random_seed: 42
 
-# 湲곗〈 multiplicative-weight baseline ?숈뒿? v2蹂대떎 泥쒖쿇???吏곸씠寃?蹂寃?
+# 기존 multiplicative-weight baseline 학습은 v2보다 천천히 움직이게 변경.
 learning:
   enabled: true
   learning_rate: 0.035
@@ -254,15 +254,15 @@ learning:
 
 local_engine:
   enabled: true
-  # ?섏튂 ?먯닔 ?곸쐞 ?꾨낫?먮쭔 DART/怨듦컻?댁뒪 ?곸꽭 遺꾩꽍???섑뻾?⑸땲??
+  # 수치 점수 상위 후보에만 DART/공개뉴스 상세 분석을 수행합니다.
   shortlist_size: 10
   max_event_age_days: 7
-  # Naver Finance??怨듦컻 醫낅ぉ?댁뒪 紐⑸줉?먯꽌 ?쒕ぉ 硫뷀??곗씠?곕쭔 ?쎌뒿?덈떎.
+  # Naver Finance의 공개 종목뉴스 목록에서 제목 메타데이터만 읽습니다.
   fetch_public_news: true
   news_max_items_per_stock: 8
   news_http_timeout_seconds: 8
   news_request_delay_seconds: 0.10
-  # 臾대즺?먯? 蹂꾨룄 湲濡쒕쾶 ?좊즺 ?곗씠???쇰뱶瑜??ъ슜?섏? ?딆븘 以묐┰ 湲곕낯媛믪엯?덈떎.
+  # 무료판은 별도 글로벌 유료 데이터 피드를 사용하지 않아 중립 기본값입니다.
   global_risk_on_default: 0.50
   macro_event_risk_default: 0.50
 
@@ -354,4 +354,3 @@ historical_training:
   # max symbol count on the CLI, then remove it for the full bootstrap.
   raw_dir: data/historical/raw
   dataset_dir: data/historical/datasets
-

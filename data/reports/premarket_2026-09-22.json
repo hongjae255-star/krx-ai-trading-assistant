@@ -1,0 +1,18 @@
+{
+  "trade_date": "2026-09-22",
+  "market_summary": "최근 유효 증권사 기업리포트 없음. 수치 국면=unknown, 글로벌 risk-on=0.70, 매크로스트레스=0.35, 예측모델=보수적 fallback, ML 혼합비중=0%. [risk-on 0.65 | VIX 14.81 | UST2Y 4.76% | UST10Y 5.01% | 2s10s +0.25%p | USD/KRW 1387.97 | HY OAS 2.68%] 무료 로컬 엔진: DART 7건, 공개 뉴스 제목 0건, 증권사 리포트 0건을 규칙/통계로 평가. 유료 LLM 호출 없음. 글로벌 매크로는 별도 유료 피드 없이 중립 기본값을 사용하므로 국내 수급·가격·공시·리포트 신호의 비중이 더 큽니다.",
+  "broker_report_count": 0,
+  "broker_report_count_today": 0,
+  "broker_reports": [],
+  "model_status": {
+    "active": false,
+    "reason": "minimum training gate",
+    "samples": 0,
+    "distinct_dates": 0,
+    "required_samples": 400,
+    "required_dates": 20,
+    "trained_as_of": "2026-09-22"
+  },
+  "shadow_candidate_count": 32,
+  "plans": []
+}

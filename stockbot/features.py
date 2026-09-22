@@ -174,6 +174,8 @@ def compute_features(
     }
 
 
+    return result
+
 
 def historical_bar_features(daily: pd.DataFrame) -> dict[str, float]:
     """Raw daily-bar features matching the V9 10-year model schema.

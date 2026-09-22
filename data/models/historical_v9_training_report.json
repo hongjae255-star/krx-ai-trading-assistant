@@ -1,0 +1,58 @@
+[
+  {
+    "market": "KR",
+    "lane": "day",
+    "samples": 5240044,
+    "train_end": "2026-09-18",
+    "test_start": "2022-09-16",
+    "test_end": "2026-09-18",
+    "auc": 0.6083756973330665,
+    "brier": 0.1920831872171053,
+    "accuracy": 0.7281555555555556,
+    "mae_return": 2.0700152327140793,
+    "positive_rate": 0.27185333333333334,
+    "model_path": "C:\\Users\\nohon\\Downloads\\krx-ai-v75\\data\\models\\historical_kr_day.pkl"
+  },
+  {
+    "market": "KR",
+    "lane": "swing",
+    "samples": 5217173,
+    "train_end": "2026-09-07",
+    "test_start": "2022-09-07",
+    "test_end": "2026-09-07",
+    "auc": 0.5844338033484763,
+    "brier": 0.2298340245238792,
+    "accuracy": 0.61741,
+    "mae_return": 6.694791767513199,
+    "positive_rate": 0.37916,
+    "model_path": "C:\\Users\\nohon\\Downloads\\krx-ai-v75\\data\\models\\historical_kr_swing.pkl"
+  },
+  {
+    "market": "US",
+    "lane": "day",
+    "samples": 10918992,
+    "train_end": "2026-09-18",
+    "test_start": "2022-09-15",
+    "test_end": "2026-09-18",
+    "auc": 0.6237968911077647,
+    "brier": 0.19107312145158806,
+    "accuracy": 0.7260688888888889,
+    "mae_return": 2.242337394615505,
+    "positive_rate": 0.2739311111111111,
+    "model_path": "C:\\Users\\nohon\\Downloads\\krx-ai-v75\\data\\models\\historical_us_day.pkl"
+  },
+  {
+    "market": "US",
+    "lane": "swing",
+    "samples": 10866196,
+    "train_end": "2026-09-04",
+    "test_start": "2022-09-08",
+    "test_end": "2026-09-04",
+    "auc": 0.6430506840745761,
+    "brier": 0.2144394200737088,
+    "accuracy": 0.6443888888888889,
+    "mae_return": 7.266118023382008,
+    "positive_rate": 0.35483,
+    "model_path": "C:\\Users\\nohon\\Downloads\\krx-ai-v75\\data\\models\\historical_us_swing.pkl"
+  }
+]

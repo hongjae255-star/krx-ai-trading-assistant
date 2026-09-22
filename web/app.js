@@ -88,12 +88,55 @@ function renderDataHealth(d){
   $('#dataHealth').innerHTML=items.map(([n,v,forced])=>{if(typeof v==='string')return `<div class="health-item ${forced||'warn'}"><span>${n}</span><b>${v}</b></div>`;const cls=v===0?'ok':v==null?'idle':'warn';return `<div class="health-item ${cls}"><span>${n}</span><b>${v===0?'OK':v==null?'대기':`${v} 경고`}</b></div>`}).join('');
 }
 function renderDiagnostics(d){
-  const x=diagnosticData(d), top=x.top||[]; $('#scanSummary').textContent=x.phase==='intraday'?`장중 전체스캔 · ${x.evaluated_count||0}개 평가`:`장전 후보 · ${x.evaluated_count||0}개 평가`;
-  if(!top.length){$('#candidateDiagnostics').innerHTML=`<div class="diag-head"><b>${esc(x.summary||'후보 데이터 없음')}</b><span class="diag-status">${esc(x.data_status||'대기')}</span></div><div class="sub">전체 스캔 후 기준에 근접한 후보가 생기면 여기에 표시됩니다.</div>`;return;}
-  const req=Number(x.required_score||top[0]?.required_score||0);
-  $('#candidateDiagnostics').innerHTML=`<div class="diag-head"><div><b>${x.accepted?'신규 주도 후보 감지':'왜 추천하지 않았나'}</b><div class="sub">추천 기준 ${req?req.toFixed(1):'-'}${x.required_probability_pct?` · 오를 가능성 ${Number(x.required_probability_pct).toFixed(1)}% 이상`:''}</div></div><span class="diag-status ${x.data_status==='ok'?'ok':''}">${esc(x.data_status||'ok')}</span></div><div class="diag-list">${top.slice(0,5).map((r,i)=>{const gap=Number(r.gap||0),prob=r.up_probability,er=r.expected_return_pct;return `<div class="diag-row"><div class="diag-rank">${i+1}</div><div class="diag-main"><div><b>${esc(r.name||r.code)}</b><span class="code">${esc(r.code)}</span></div><div class="diag-reasons">${(r.reasons||[]).slice(0,3).map(z=>`<span>${esc(z)}</span>`).join('')||'<span>점수 순위/선발 슬롯 기준</span>'}</div><div class="diag-extra">${prob!=null?`오를 가능성 ${Number(prob).toFixed(1)}% · `:''}${er!=null?`기대수익 ${pct(er)} · `:''}${r.change_pct!=null?`당일 ${pct(r.change_pct)}`:''}</div></div><div class="diag-score"><strong>${Number(r.score||0).toFixed(1)}</strong><small class="${gap>=0?'change pos':'change neg'}">${gap>=0?'+':''}${gap.toFixed(1)}</small></div></div>`}).join('')}</div>`;
-}
+  const x=diagnosticData(d), top=x.top||[], watch=x.watch_top||top.slice(0,3), funnel=x.funnel||{}, reasons=x.reason_counts||[];
+  const evaluated=Number(funnel.evaluated??x.evaluated_count??0), scorePass=Number(funnel.score_pass??0), probPass=Number(funnel.probability_pass??scorePass), selected=Number(funnel.selected??x.selected_count??0);
+  const mlActive=Boolean(funnel.ml_active), slots=Number(funnel.slots||3);
+  $('#scanSummary').textContent=x.phase==='intraday'?`장중 스캔 · ${Number(x.evaluated_count||evaluated)}개 평가`:`장전 스캔 · ${evaluated}개 평가`;
+  $('#executionCount').textContent=selected>0?`${selected}개 실행 후보`:'0개 · 현금 대기';
+  $('#executionCount').className=`decision-badge ${selected>0?'go':'wait'}`;
 
+  if(!evaluated && !top.length){
+    $('#candidateDiagnostics').innerHTML=`<div class="card diagnostics-card"><div class="diag-head"><b>${esc(x.summary||'후보 데이터 없음')}</b><span class="diag-status">${esc(x.data_status||'대기')}</span></div><div class="sub">장전 또는 장중 스캔이 끝나면 실행 후보, 관심 후보, 탈락 이유가 여기에 표시됩니다.</div></div>`;
+    return;
+  }
+
+  const stages=[
+    ['전체 분석',evaluated,'스캔 완료'],
+    ['점수 통과',scorePass,`기준 ${Number(x.required_score||0).toFixed(1)}점 이상`],
+    [mlActive?'AI 확률 통과':'추가 조건 통과',probPass,mlActive?`상승확률 ${Number(x.required_probability_pct||0).toFixed(1)}% 이상`:'점수 기준 중심'],
+    ['실행 후보',selected,`최대 ${slots}개`],
+  ];
+  const max=Math.max(evaluated,1);
+  const funnelHtml=stages.map((st,i)=>{
+    const w=Math.max(4,100*Number(st[1]||0)/max);
+    return `<div class="funnel-step"><div class="funnel-label"><span>${i+1}. ${esc(st[0])}</span><b>${fmt(st[1])}개</b></div><div class="funnel-track"><span style="width:${w.toFixed(1)}%"></span></div><div class="funnel-note">${esc(st[2])}</div></div>`;
+  }).join('');
+
+  const watchHtml=watch.length?watch.map((r,i)=>{
+    const gap=Number(r.gap||0), prob=r.up_probability, er=r.expected_return_pct;
+    return `<article class="watch-card"><div class="watch-rank">${i+1}</div><div class="watch-body"><div class="watch-title"><b>${esc(r.name||r.code)}</b><span class="code">${esc(r.code)}</span></div><div class="watch-metrics"><span>점수 <b>${Number(r.score||0).toFixed(1)}</b></span>${prob!=null?`<span>오를 가능성 <b>${Number(prob).toFixed(1)}%</b></span>`:''}${er!=null?`<span>예상수익 <b>${pct(er)}</b></span>`:''}</div><div class="watch-reasons">${(r.reasons||[]).slice(0,3).map(z=>`<span>${esc(easyTerm(z))}</span>`).join('')||'<span>실행 기준에 가장 가까운 관심 후보</span>'}</div></div><div class="watch-gap ${gap>=0?'pos':'neg'}">${gap>=0?'+':''}${gap.toFixed(1)}</div></article>`;
+  }).join(''):'<div class="sub">실행 후보 외 관심 후보가 없습니다.</div>';
+
+  const reasonHtml=reasons.length?reasons.slice(0,4).map((r,i)=>`<div class="reason-row"><span>${i+1}. ${esc(r.reason)}</span><b>${fmt(r.count)}개</b></div>`).join(''):'<div class="sub">탈락 이유 집계가 아직 없습니다.</div>';
+
+  $('#candidateDiagnostics').innerHTML=`
+    <div class="card decision-summary ${selected>0?'has-pick':'no-pick'}">
+      <div><span class="decision-kicker">오늘의 결론</span><h3>${selected>0?`실행 후보 ${selected}개`:'실행 후보 없음 · 현금 대기'}</h3><div class="sub">${esc(x.summary||'후보를 기준에 따라 선별했습니다.')}</div></div>
+      <div class="decision-number">${selected}</div>
+    </div>
+    <div class="card diagnostics-card">
+      <div class="diag-head"><div><b>후보가 어떻게 줄었나요?</b><div class="sub">전체 후보가 어떤 기준에서 걸러졌는지 보여줍니다.</div></div><span class="diag-status ${x.data_status==='ok'?'ok':''}">${esc(x.data_status||'ok')}</span></div>
+      <div class="funnel-list">${funnelHtml}</div>
+    </div>
+    <div class="card diagnostics-card">
+      <div class="diag-head"><div><b>관심 후보 Top ${Math.min(3,watch.length||3)}</b><div class="sub">실행 기준은 못 넘었지만 오늘 가장 가까웠던 종목입니다. 매수 추천과는 다릅니다.</div></div><span class="watch-pill">WATCH</span></div>
+      <div class="watch-list">${watchHtml}</div>
+    </div>
+    <div class="card diagnostics-card">
+      <div class="diag-head"><div><b>가장 많이 탈락한 이유</b><div class="sub">추천이 비는 원인을 숫자로 확인할 수 있습니다.</div></div></div>
+      <div class="reason-list">${reasonHtml}</div>
+    </div>`;
+}
 
 function laneStatusBadge(status){
   const action=String(status||'WATCH').toUpperCase()==='ACTIONABLE';
@@ -150,7 +193,7 @@ function renderHome(d){
   renderMarketPulse(d); renderDataHealth(d);
   renderStrategyLanes(d); renderInstitutional(d);
   const root=$('#recommendations');
-  root.innerHTML=!a.recs.length?'<div class="card no-rec"><b>엄격 실행기준 통과 종목 없음</b><div class="sub">오류가 아닙니다. 위 <b>듀얼 전략 후보</b>에는 기준 미달도 WATCH로 계속 표시되며, 아래 진단에서 탈락 이유를 확인할 수 있습니다.</div></div>':a.recs.map(r=>stockCard(r,a.currency)).join('');
+  root.innerHTML=!a.recs.length?'<div class="card no-rec"><b>오늘은 실행 후보 0개 · 현금 대기</b><div class="sub">오류가 아닙니다. 억지로 종목을 채우지 않았습니다. 아래 <b>오늘 후보 흐름</b>에서 관심 후보 Top 3와 탈락 이유를 확인하세요.</div></div>':a.recs.map(r=>stockCard(r,a.currency)).join('');
   renderDiagnostics(d);
   $('#reportCount').textContent=currentMarket==='US'?'GLOBAL':fmt(a.reports.report_count);
   $('#brokerCount').textContent=currentMarket==='US'?'금리·FX·신용 반영':`${fmt(a.reports.broker_count)}개 증권사/기관`;

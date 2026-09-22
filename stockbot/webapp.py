@@ -200,7 +200,9 @@ class DashboardStore:
         if not rows:
             return {
                 "market": market, "trade_date": trade_date, "phase": "premarket",
-                "data_status": "not_scanned", "evaluated_count": 0, "top": [],
+                "data_status": "not_scanned", "evaluated_count": 0, "top": [], "watch_top": [],
+                "funnel": {"evaluated": 0, "score_pass": 0, "probability_pass": 0, "selected": len(recs)},
+                "reason_counts": [],
                 "summary": "아직 후보 스캔 기록이 없습니다.",
             }
         selected = {str(x.get("code", "")) for x in recs}
@@ -227,51 +229,88 @@ class DashboardStore:
             min_prob = 0.0
             slots = int(self.settings.get("us_market.market.final_pick_count", 3))
 
+        score_pass = 0
+        probability_pass = 0
+        reason_counts: dict[str, int] = {}
         top = []
         for x in rows:
-            if str(x.get("code", "")) in selected:
-                continue
             pred = x.get("prediction") or {}
             score = _safe_float(x.get("final_score"))
-            reasons = []
-            if score < threshold:
-                reasons.append(f"최종점수 {score:.1f} < 기준 {threshold:.1f}")
+            score_ok = score >= threshold
+            if score_ok:
+                score_pass += 1
+            prob = _safe_float(pred.get("up_probability")) if pred.get("active") else None
+            prob_ok = True
             if market == "KR" and active_ml and bool(pred.get("active")):
-                prob = _safe_float(pred.get("up_probability"))
-                if prob < min_prob:
-                    reasons.append(f"상승확률 {100*prob:.1f}% < 기준 {100*min_prob:.1f}%")
+                prob_ok = bool(prob is not None and prob >= min_prob)
+            if score_ok and prob_ok:
+                probability_pass += 1
+
+            if str(x.get("code", "")) in selected:
+                continue
+
+            reasons = []
+            if not score_ok:
+                reasons.append(f"최종점수 {score:.1f} < 기준 {threshold:.1f}")
+                reason_counts["점수 기준 미달"] = reason_counts.get("점수 기준 미달", 0) + 1
+            if market == "KR" and active_ml and bool(pred.get("active")) and not prob_ok:
+                reasons.append(f"상승확률 {100*float(prob or 0):.1f}% < 기준 {100*min_prob:.1f}%")
+                reason_counts["AI 상승확률 미달"] = reason_counts.get("AI 상승확률 미달", 0) + 1
             if not reasons and len(selected) >= slots:
                 reasons.append(f"선발 슬롯 {slots}개 밖")
+                reason_counts["선발 슬롯 밖"] = reason_counts.get("선발 슬롯 밖", 0) + 1
             flags = list(x.get("risk_flags") or [])
+            if flags:
+                reason_counts["리스크 경고 있음"] = reason_counts.get("리스크 경고 있음", 0) + 1
             top.append({
                 "code": x.get("code"), "name": x.get("name"), "price": x.get("price"),
                 "score": round(score, 2), "required_score": round(threshold, 2),
                 "gap": round(score-threshold, 2),
-                "up_probability": (round(100*_safe_float(pred.get("up_probability")), 1) if pred.get("active") else None),
+                "up_probability": (round(100*float(prob or 0), 1) if pred.get("active") else None),
                 "expected_return_pct": (round(_safe_float(pred.get("expected_return_pct")), 2) if pred.get("active") else None),
                 "risk_flags": flags,
                 "reasons": reasons + [self._flag_label(f) for f in flags[:2]],
             })
         top.sort(key=lambda z: _safe_float(z.get("score")), reverse=True)
         best = top[0] if top else None
+        reason_rows = [
+            {"reason": k, "count": v}
+            for k, v in sorted(reason_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
         return {
             "market": market, "trade_date": trade_date, "phase": "premarket",
             "data_status": "ok", "evaluated_count": len(rows), "selected_count": len(recs),
             "required_score": round(threshold, 2), "required_probability_pct": round(100*min_prob, 1) if active_ml else None,
-            "regime": regime, "top": top[:5],
-            "summary": (f"최고 탈락후보 {best['score']:.1f} / 기준 {threshold:.1f}" if best else "기준 통과 후보만 선발됨"),
+            "regime": regime, "top": top[:5], "watch_top": top[:3],
+            "funnel": {
+                "evaluated": len(rows),
+                "score_pass": score_pass,
+                "probability_pass": probability_pass,
+                "selected": len(recs),
+                "slots": slots,
+                "ml_active": bool(active_ml),
+            },
+            "reason_counts": reason_rows[:5],
+            "summary": (f"최고 관심후보 {best['score']:.1f} / 실행 기준 {threshold:.1f}" if best else "기준 통과 후보만 선발됨"),
         }
 
     def candidate_diagnostics(self, market: str, trade_date: str, recs: list[dict]) -> dict:
         db = self.db if market == "KR" else self.us_db
+        base = self._premarket_diagnostics(db, trade_date, market, recs)
         key = "last_replacement_scan" if market == "KR" else "us_last_replacement_scan"
         scan = db.get_state(key, {}) or {}
         if str(scan.get("trade_date", "")) == trade_date and scan.get("phase") == "intraday":
             top = list(scan.get("top") or [])
             for x in top:
                 x["reasons"] = [self._flag_label(r.replace("risk: ", "")) if str(r).startswith("risk: ") else r for r in (x.get("reasons") or [])]
-            return {**scan, "market": market, "top": top}
-        return self._premarket_diagnostics(db, trade_date, market, recs)
+            return {
+                **base, **scan, "market": market, "top": top,
+                "watch_top": top[:3] if top else base.get("watch_top", []),
+                "funnel": base.get("funnel", {}),
+                "reason_counts": base.get("reason_counts", []),
+                "selected_count": len(recs),
+            }
+        return base
 
     def data_health(self, market_pulse: dict, kr_diag: dict, us_diag: dict) -> dict:
         macro = self.global_macro()

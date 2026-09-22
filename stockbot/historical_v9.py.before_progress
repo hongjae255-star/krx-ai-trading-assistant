@@ -319,23 +319,76 @@ def _download_yfinance_symbol(symbol: str, start: str, end: str) -> pd.DataFrame
 
 
 def korea_symbols(as_of: str | None = None) -> list[tuple[str, str]]:
+    """
+    Return current KOSPI/KOSDAQ universe.
+
+    FinanceDataReader is used first because pykrx universe discovery can
+    intermittently fail when the KRX website changes or returns non-JSON data.
+    pykrx is retained only as a fallback.
+    """
+    rows: list[tuple[str, str]] = []
+
+    # Primary source: FinanceDataReader
+    try:
+        import FinanceDataReader as fdr
+
+        for market, suffix in (("KOSPI", ".KS"), ("KOSDAQ", ".KQ")):
+            df = fdr.StockListing(market)
+
+            if df is None or df.empty:
+                continue
+
+            if "Code" in df.columns:
+                code_col = "Code"
+            elif "Symbol" in df.columns:
+                code_col = "Symbol"
+            else:
+                continue
+
+            for code in df[code_col].dropna().astype(str):
+                code = code.strip().zfill(6)
+                if code.isdigit() and len(code) == 6:
+                    rows.append((code + suffix, market))
+
+        if rows:
+            return list(dict.fromkeys(rows))
+
+    except Exception as exc:
+        print(f"[KR universe] FinanceDataReader failed: {exc}")
+
+    # Fallback: pykrx
     try:
         from pykrx import stock
-    except ImportError as exc:
-        raise RuntimeError("Install pykrx for Korean universe discovery: pip install pykrx") from exc
-    d = (as_of or date.today().strftime("%Y%m%d")).replace("-", "")
-    # Walk backwards across weekends/holidays until KRX returns symbols.
-    cur = pd.Timestamp(d)
-    for _ in range(14):
-        ds = cur.strftime("%Y%m%d")
-        rows: list[tuple[str, str]] = []
-        for market in ("KOSPI", "KOSDAQ"):
-            for code in stock.get_market_ticker_list(ds, market=market):
-                rows.append((f"{code}.KS" if market == "KOSPI" else f"{code}.KQ", market))
-        if rows:
-            return rows
-        cur -= pd.Timedelta(days=1)
-    return []
+
+        d = (as_of or date.today().strftime("%Y%m%d")).replace("-", "")
+        cur = pd.Timestamp(d)
+
+        for _ in range(14):
+            ds = cur.strftime("%Y%m%d")
+            rows = []
+
+            try:
+                for market in ("KOSPI", "KOSDAQ"):
+                    suffix = ".KS" if market == "KOSPI" else ".KQ"
+                    codes = stock.get_market_ticker_list(ds, market=market)
+
+                    for code in codes:
+                        rows.append((f"{code}{suffix}", market))
+            except Exception as exc:
+                print(f"[KR universe] pykrx failed for {ds}: {exc}")
+                rows = []
+
+            if rows:
+                return list(dict.fromkeys(rows))
+
+            cur -= pd.Timedelta(days=1)
+
+    except Exception as exc:
+        print(f"[KR universe] pykrx fallback failed: {exc}")
+
+    raise RuntimeError(
+        "Could not obtain Korean stock universe from FinanceDataReader or pykrx."
+    )
 
 
 def usa_symbols() -> list[tuple[str, str]]:

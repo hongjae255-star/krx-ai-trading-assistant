@@ -181,18 +181,27 @@ def _bounded_sample(df: pd.DataFrame, max_rows: int, seed: int) -> pd.DataFrame:
     return df.iloc[idx].copy()
 
 
+def _progress_line(label: str, current: int, total: int, detail: str = "") -> None:
+    total = max(1, int(total))
+    current = min(max(0, int(current)), total)
+    pct = current / total * 100.0
+    suffix = f" | {detail}" if detail else ""
+    print(f"\r[{label}] {pct:6.2f}% | {current:,}/{total:,}{suffix}", end="", flush=True)
+    if current >= total:
+        print(flush=True)
+
+
 def train_one(dataset: pd.DataFrame, market: str, lane: str, model_dir: Path,
               test_days: int = 252, half_life_days: int = 730, random_seed: int = 42,
               walk_forward_folds: int = 3, max_fit_rows: int = 750_000,
               max_eval_rows: int = 300_000) -> TrainResult:
-    """Train one market/horizon bundle with expanding walk-forward evaluation.
-
-    Evaluation always trains on dates strictly before the test block. After the
-    metrics are produced, a deployment model is refit on every labeled row so
-    the live system benefits from the newest available history.
-    """
+    """Train one market/horizon bundle with expanding walk-forward evaluation."""
     if HistGradientBoostingClassifier is None:
         raise RuntimeError("scikit-learn is required")
+
+    label_name = f"{market.upper()} {'하루' if lane == 'day' else '1~2주'} 모델"
+    _progress_line(label_name, 0, 100, "데이터 준비")
+
     df = dataset[dataset["market"].str.upper() == market.upper()].copy()
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["date", "symbol"])
@@ -207,7 +216,6 @@ def train_one(dataset: pd.DataFrame, market: str, lane: str, model_dir: Path,
     if len(unique_dates) < 400:
         raise ValueError(f"not enough trading dates: {len(unique_dates)}")
 
-    # Expanding walk-forward blocks over roughly the final 40% of history.
     first_test_i = max(252, int(len(unique_dates) * 0.60))
     remaining = unique_dates[first_test_i:]
     blocks = [b for b in np.array_split(remaining, min(max(1, walk_forward_folds), len(remaining))) if len(b)]
@@ -216,6 +224,8 @@ def train_one(dataset: pd.DataFrame, market: str, lane: str, model_dir: Path,
     all_r: list[np.ndarray] = []
     all_rp: list[np.ndarray] = []
     fold_rows: list[dict[str, Any]] = []
+
+    _progress_line(label_name, 8, 100, f"Walk-Forward 검증 {len(blocks)}개 구간")
 
     for fold_i, block in enumerate(blocks):
         start_date = pd.Timestamp(block[0])
@@ -237,7 +247,11 @@ def train_one(dataset: pd.DataFrame, market: str, lane: str, model_dir: Path,
                                              l2_regularization=1.0, random_state=random_seed + fold_i)
         reg = HistGradientBoostingRegressor(max_iter=150, learning_rate=0.06, max_leaf_nodes=31,
                                             l2_regularization=1.0, random_state=random_seed + fold_i)
+        _progress_line(label_name, 10 + int(45 * fold_i / max(1, len(blocks))), 100,
+                       f"검증 {fold_i + 1}/{len(blocks)} 분류 학습")
         clf.fit(Xtr, ytr, sample_weight=sw)
+        _progress_line(label_name, 16 + int(45 * fold_i / max(1, len(blocks))), 100,
+                       f"검증 {fold_i + 1}/{len(blocks)} 수익률 학습")
         reg.fit(Xtr, rtr, sample_weight=sw)
         prob = clf.predict_proba(Xte)[:, 1]
         pred = reg.predict(Xte)
@@ -250,6 +264,9 @@ def train_one(dataset: pd.DataFrame, market: str, lane: str, model_dir: Path,
             "accuracy": float(accuracy_score(yte, prob >= 0.5)),
             "mae_return": float(mean_absolute_error(rte, pred)),
         })
+        _progress_line(label_name, 22 + int(45 * (fold_i + 1) / max(1, len(blocks))), 100,
+                       f"검증 {fold_i + 1}/{len(blocks)} 완료")
+
     if not all_y:
         raise ValueError("walk-forward produced no valid folds")
     y_eval = np.concatenate(all_y); p_eval = np.concatenate(all_p)
@@ -259,7 +276,7 @@ def train_one(dataset: pd.DataFrame, market: str, lane: str, model_dir: Path,
     acc = float(accuracy_score(y_eval, p_eval >= 0.5))
     mae = float(mean_absolute_error(r_eval, rp_eval))
 
-    # Deployment refit: use all labeled history, still with recency weighting.
+    _progress_line(label_name, 70, 100, "최종 전체 데이터 준비")
     fit = _bounded_sample(df, max_fit_rows, random_seed + 999)
     X = fit[FEATURES].astype(float).fillna(0.0).clip(-20, 20).to_numpy()
     y = fit[label].astype(int).to_numpy()
@@ -269,7 +286,9 @@ def train_one(dataset: pd.DataFrame, market: str, lane: str, model_dir: Path,
                                          l2_regularization=1.0, random_state=random_seed)
     reg = HistGradientBoostingRegressor(max_iter=180, learning_rate=0.055, max_leaf_nodes=31,
                                         l2_regularization=1.0, random_state=random_seed)
+    _progress_line(label_name, 76, 100, "최종 분류 모델 학습")
     clf.fit(X, y, sample_weight=sw)
+    _progress_line(label_name, 88, 100, "최종 수익률 모델 학습")
     reg.fit(X, rr, sample_weight=sw)
 
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -286,13 +305,13 @@ def train_one(dataset: pd.DataFrame, market: str, lane: str, model_dir: Path,
     }
     with model_path.open("wb") as f:
         pickle.dump(bundle, f)
+    _progress_line(label_name, 100, 100, f"완료 → {model_path.name}")
     return TrainResult(
         market=market.upper(), lane=lane, samples=len(df),
         train_end=bundle["trained_through"], test_start=fold_rows[0]["test_start"], test_end=fold_rows[-1]["test_end"],
         auc=auc, brier=brier, accuracy=acc, mae_return=mae, positive_rate=float(y_eval.mean()),
         model_path=str(model_path),
     )
-
 
 def predict_bundle(model_path: str | Path, feature_rows: pd.DataFrame) -> pd.DataFrame:
     with Path(model_path).open("rb") as f:
@@ -435,12 +454,17 @@ def download_market(market: str, raw_dir: Path, years: int = 10, max_symbols: in
     out_dir.mkdir(parents=True, exist_ok=True)
     ok = failed = skipped = 0
     failures: list[dict[str, str]] = []
+    total = len(symbols)
+    label = f"{market} 10년 데이터 다운로드"
+    _progress_line(label, 0, total, f"성공 0 | 건너뜀 0 | 실패 0")
+
     for i, (symbol, exchange) in enumerate(symbols, 1):
         path = out_dir / f"{_safe_symbol(symbol)}.csv.gz"
         if resume and path.exists():
             try:
                 if len(pd.read_csv(path, nrows=5)) > 0:
                     skipped += 1
+                    _progress_line(label, i, total, f"성공 {ok:,} | 건너뜀 {skipped:,} | 실패 {failed:,} | {symbol}")
                     continue
             except Exception:
                 pass
@@ -456,53 +480,85 @@ def download_market(market: str, raw_dir: Path, years: int = 10, max_symbols: in
             failed += 1
             if len(failures) < 100:
                 failures.append({"symbol": symbol, "error": str(exc)[:180]})
+        _progress_line(label, i, total, f"성공 {ok:,} | 건너뜀 {skipped:,} | 실패 {failed:,} | {symbol}")
         if sleep_seconds:
             time.sleep(float(sleep_seconds))
+
     summary = {"market": market, "symbols": len(symbols), "downloaded": ok, "skipped": skipped,
                "failed": failed, "start": str(start_d), "end": str(end_d), "failures": failures}
     (out_dir / "_download_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[{market}] 다운로드 완료: 성공 {ok:,}, 기존파일 {skipped:,}, 실패 {failed:,}, 전체 {total:,}")
     return summary
-
 
 def build_dataset(raw_dir: Path, dataset_dir: Path, market: str) -> dict[str, Any]:
     market = market.upper()
     frames: list[pd.DataFrame] = []
     source = raw_dir / market.lower()
     files = sorted(source.glob("*.csv.gz"))
-    for p in files:
+    total = len(files)
+    label = f"{market} 학습 데이터셋 생성"
+    _progress_line(label, 0, total, "사용가능 0 | 오류 0")
+    usable = errors = 0
+
+    for i, p in enumerate(files, 1):
         try:
             raw = pd.read_csv(p)
             symbol = str(raw["symbol"].iloc[0]) if "symbol" in raw and len(raw) else p.stem
             f = build_features_and_labels(raw, symbol, market)
             if not f.empty:
                 frames.append(f)
+                usable += 1
         except Exception:
-            continue
+            errors += 1
+        _progress_line(label, i, total, f"사용가능 {usable:,} | 오류 {errors:,} | {p.name}")
+
     if not frames:
         raise RuntimeError(f"no usable {market} raw files in {source}")
+    print(f"[{market}] 개별 종목 feature 계산 완료. {usable:,}개 파일 결합 중...")
     ds = pd.concat(frames, ignore_index=True)
     ds["date"] = pd.to_datetime(ds["date"]).dt.strftime("%Y-%m-%d")
     dataset_dir.mkdir(parents=True, exist_ok=True)
     path = dataset_dir / f"historical_{market.lower()}_features.csv.gz"
+    print(f"[{market}] 데이터셋 저장 중... 행 {len(ds):,}개")
     ds.to_csv(path, index=False, compression="gzip")
     meta = {"market": market, "symbols": int(ds["symbol"].nunique()), "rows": len(ds),
             "first_date": str(ds["date"].min()), "last_date": str(ds["date"].max()), "path": str(path)}
     (dataset_dir / f"historical_{market.lower()}_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[{market} 학습 데이터셋 생성] 100.00% | 완료 | 종목 {meta['symbols']:,} | 행 {meta['rows']:,}")
     return meta
-
 
 def train_all(dataset_dir: Path, model_dir: Path) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
+    jobs: list[tuple[str, str, Path]] = []
     for market in ("KR", "US"):
         p = dataset_dir / f"historical_{market.lower()}_features.csv.gz"
-        if not p.exists():
-            continue
-        df = pd.read_csv(p)
-        for lane in ("day", "swing"):
-            results.append(train_one(df, market, lane, model_dir).__dict__)
-    (model_dir / "historical_v9_training_report.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
-    return results
+        if p.exists():
+            for lane in ("day", "swing"):
+                jobs.append((market, lane, p))
 
+    if not jobs:
+        raise RuntimeError(f"no historical datasets found in {dataset_dir}")
+
+    total = len(jobs)
+    cache: dict[str, pd.DataFrame] = {}
+    print(f"[전체 모델 학습] 0.00% | 0/{total} 모델")
+    for i, (market, lane, p) in enumerate(jobs, 1):
+        key = str(p)
+        if key not in cache:
+            print(f"[{market}] 학습 데이터 읽는 중: {p.name}")
+            cache[key] = pd.read_csv(p)
+        lane_ko = "하루 +1%" if lane == "day" else "1~2주"
+        before_pct = (i - 1) / total * 100.0
+        print(f"[전체 모델 학습] {before_pct:6.2f}% | {i}/{total} 시작: {market} {lane_ko}")
+        result = train_one(cache[key], market, lane, model_dir).__dict__
+        results.append(result)
+        after_pct = i / total * 100.0
+        print(f"[전체 모델 학습] {after_pct:6.2f}% | {i}/{total} 완료: {market} {lane_ko}")
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    (model_dir / "historical_v9_training_report.json").write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding="utf-8")
+    print("[전체 모델 학습] 100.00% | 4개 모델 학습/저장 완료" if total == 4 else f"[전체 모델 학습] 100.00% | {total}개 모델 학습/저장 완료")
+    return results
 
 def cli(root: Path, argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="historical-v9")

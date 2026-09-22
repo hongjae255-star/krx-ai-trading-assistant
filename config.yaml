@@ -22,7 +22,7 @@ monitoring:
   # 기존 추천이 있을 때는 최하위 추천보다 이 점수만큼 강해야 교체 후보로 알립니다.
   replacement_score_margin: 8.0
   # 아침 추천이 0개였을 때도 장중 신규 주도 후보는 이 점수 이상이어야 알립니다.
-  new_leader_min_score: 68.0
+  new_leader_min_score: 62.0
   # Telegram은 상태 변화/목표·손절·진입 신호가 있을 때 즉시,
   # 변화가 없어도 15분마다 요약을 보냅니다.
   telegram_summary_interval_minutes: 15
@@ -226,14 +226,14 @@ prediction:
   drift_recent_days: 4
   drift_reduce_threshold: 1.35
   drift_disable_threshold: 2.50
-  min_up_probability: 0.56
-  min_expected_return_pct: 0.20
-  minimum_lower_bound_pct: -1.80
-  minimum_final_score: 60.0
-  risk_off_score_add: 4.0
-  high_vol_score_add: 2.0
-  risk_off_probability_add: 0.04
-  high_event_risk_score_add: 2.0
+  min_up_probability: 0.52
+  min_expected_return_pct: 0.10
+  minimum_lower_bound_pct: -2.20
+  minimum_final_score: 56.0
+  risk_off_score_add: 2.0
+  high_vol_score_add: 1.0
+  risk_off_probability_add: 0.02
+  high_event_risk_score_add: 1.0
   allow_abstain: true
   lower_bound_penalty_per_pct: 4.0
   random_seed: 42
@@ -344,7 +344,7 @@ historical_training:
   years: 10
   recency_half_life_days: 730
   holdout_trading_days: 252
-  historical_blend_weight: 0.15
+  historical_blend_weight: 0.05
   day_target_pct: 1.0
   day_stop_pct: -1.0
   swing_horizon_days: 10
